@@ -6,10 +6,8 @@ Dailies AXI builds local video review pages for Lavish. A reviewer can mark an o
 
 You need Node.js 26 or later with npm, Git, FFmpeg with the `libx264` encoder, FFprobe, and a modern browser with H.264 support. Install the external review host with `npm install -g lavish-axi`. Make sure `node`, `ffmpeg`, `ffprobe`, and `lavish-axi` are on your `PATH`.
 
-Set `REPO_URL` to the clone URL shown by GitHub before running the install commands.
-
 ```sh
-git clone "$REPO_URL" dailies-axi
+git clone https://github.com/Kitlee0252/dailies-axi.git
 cd dailies-axi
 npm ci
 npm link
