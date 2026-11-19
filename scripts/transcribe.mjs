@@ -2,55 +2,16 @@
 // https://github.com/moritzkremb/framejam/blob/bc45364aff90ba931d350e931291940fdc6e604c/src/server/transcribe.ts
 // MIT License, Copyright (c) 2026 Moritz Kremb. See third_party/framejam/LICENSE.
 // Changes: source-time cache, corrected SRT, Mandarin default, local tools only.
-import { execFile, spawnSync } from 'node:child_process';
-import fs from 'node:fs';
+import { execFile } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { parseArgs, promisify } from 'node:util';
 import { isTranscriptError, parseTranscript } from './transcript.mjs';
 import { readManifest, sha256, writeJson } from './manifest.mjs';
+import { findModel, findWhisper } from './whisper.mjs';
 
 const exec = promisify(execFile);
-const MODEL_RANK = ['large-v3-turbo', 'large-v3', 'large', 'medium', 'small', 'base', 'tiny'];
-
-function onPath(cmd) {
-  const res = spawnSync(process.platform === 'win32' ? 'where' : 'which', [cmd], { encoding: 'utf8' });
-  return res.status === 0 ? res.stdout.split(/\r?\n/)[0]?.trim() || undefined : undefined;
-}
-
-function findWhisper() {
-  const configured = process.env.DAILIES_WHISPER;
-  if (configured) return fs.existsSync(configured) ? configured : onPath(configured);
-  return onPath('whisper-cli') ?? onPath('whisper-cpp');
-}
-
-function findModel(dir) {
-  const configured = process.env.DAILIES_WHISPER_MODEL;
-  if (configured) return fs.existsSync(configured) ? configured : undefined;
-  const home = os.homedir();
-  const dirs = [path.join(dir, 'models'), path.join(home, '.cache', 'whisper.cpp'),
-    path.join(home, '.cache'), path.join(home, '.cache', 'hyperframes', 'whisper', 'models')];
-  const found = [];
-  for (const dir of dirs) {
-    let names;
-    try {
-      names = fs.readdirSync(dir);
-    } catch {
-      continue;
-    }
-    for (const n of names) {
-      if (/^ggml-.*\.bin$|^whisper-.*\.bin$/.test(n) && !n.includes('silero') && !/\.en[.-]/.test(n)) {
-        found.push(path.join(dir, n));
-      }
-    }
-  }
-  const rank = f => {
-    const i = MODEL_RANK.findIndex(m => path.basename(f).includes(m));
-    return i < 0 ? MODEL_RANK.length : i;
-  };
-  return found.sort((a, b) => rank(a) - rank(b))[0];
-}
 
 const { positionals: [id, extra], values } = parseArgs({
   allowPositionals: true, options: { media: { type: 'string', default: 'media' }, srt: { type: 'string' }, language: { type: 'string', default: 'zh' } },

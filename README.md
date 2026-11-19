@@ -1,79 +1,108 @@
-# Local video review
+# Dailies AXI
 
-Review a live HyperFrames composition in Lavish. Drag a rectangle to point to an editable element or part of a shot, select a time range for a cut, or leave a whole-video note. The agent receives one batch per version through the existing Lavish poll.
+Dailies AXI builds local video review pages for Lavish. A reviewer can mark an on-screen region, select a frame range, or leave a whole-video note. The agent receives one feedback batch per version, with references to the composition and exact source frames.
 
-## Run the animation sample
+## Install from a clone
 
-Requires Node 26, npm, FFmpeg and FFprobe on `PATH`, a HyperFrames-compatible browser, and `lavish-axi`. Run from the repository root.
+You need Node.js 26 or later with npm, Git, FFmpeg with the `libx264` encoder, FFprobe, and a modern browser with H.264 support. Install the external review host with `npm install -g lavish-axi`. Make sure `node`, `ffmpeg`, `ffprobe`, and `lavish-axi` are on your `PATH`.
+
+Set `REPO_URL` to the clone URL shown by GitHub before running the install commands.
 
 ```sh
+git clone "$REPO_URL" dailies-axi
+cd dailies-axi
 npm ci
-npm test
-node scripts/build-review.mjs v1
-lavish-axi review/v1/review.html
-node scripts/poll-review.mjs review/v1/review.html
+npm link
+dailies-axi doctor
 ```
 
-The 24-second Night Signal sample has a title, caption, animated orbit and background. For an optional render check, run:
+With the clone on disk and npm’s global bin directory on your `PATH`, `dailies-axi` works from any directory. Use `dailies-axi --help` for the command list and `dailies-axi <command> --help` for options. Doctor exits with status 1 when a required tool is missing. Whisper and its model are optional.
+
+## Animation quick start
+
+Choose a directory for the sample workspace and its review builds.
 
 ```sh
-mkdir -p renders
-DO_NOT_TRACK=1 npx --no-install hyperframes lint review/v1/composition
-DO_NOT_TRACK=1 npx --no-install hyperframes render review/v1/composition --fps 24 --output "$PWD/renders/v1.mp4"
+dailies-axi init night-signal --sample
+cd night-signal
+dailies-axi build v1
+dailies-axi review v1
+dailies-axi poll v1
 ```
 
-## Ingest and review footage locally
+This opens the 24-second Night Signal composition in Lavish. Keep the poll attached while the reviewer marks the page and submits feedback.
 
-**Never run `lavish-axi share` or `lavish-axi export` on footage review pages.** The same rule applies to the Lavish browser menu. Keep originals, proxies, frame grabs, transcripts, review builds and feedback logs off Git and out of uploads. Put them under the ignored `source/`, `media/`, `renders/`, `review/`, or `notes/` directories, or use a private directory outside the repository.
+## Footage quick start
+
+**Never use `lavish-axi share` or `lavish-axi export` on footage reviews, including through the Lavish browser menu.** Use a private workspace outside the tool checkout. Keep originals, proxies, frame grabs, transcripts, review builds, and feedback off Git and out of uploads. For machine-local reviews, configure Lavish to listen only on loopback. Lavish can bind a Tailscale address by default. [Lavish network configuration](https://github.com/kunchenguid/lavish-axi#how-it-works)
 
 ```sh
-mkdir -p source
-node scripts/ingest.mjs /path/to/local-original.mov camera
-cp composition/footage.html source/index.html
+dailies-axi init my-review
+cd my-review
+# Put a local original at source/original.mov or pass its existing path.
+dailies-axi ingest source/original.mov camera
+dailies-axi build v1
+dailies-axi review v1
+dailies-axi poll v1
 ```
 
-Use the dimensions, fps and duration printed by ingest in `source/index.html`. Set the CSS canvas dimensions, the root's `data-width`, `data-height`, `data-fps`, and both `data-duration` values. The template uses a `video.clip` with a stable HTML `id`, `data-review-clip="camera"` for the manifest asset, and a relative `media/camera.mp4` reference. Keep clip starts, durations, and media starts on frame boundaries at the composition rate. Use a separate ID for each segment, including segments that reference the same proxy. Keep `data-has-audio="true"` for clips with sound. For silent clips, replace it with `muted`. Set `--fps RATE` during ingest if another asset needs conforming to the composition rate. The manifest records the resampling and original timestamps.
+The first ingest fills the untouched `source/index.html` with the proxy’s dimensions, frame rate, duration, asset ID and audio setting. It leaves the original in place and writes the proxy and manifest under `media/`. Ingest additional clips under distinct asset IDs and use `--fps RATE` to conform them to the composition rate. Place later segments in the working composition with unique HTML IDs, `data-review-clip` set to the manifest asset ID, and a `media/<asset-id>.mp4` reference. Keep starts, durations and media starts on frame boundaries.
 
-The proxy is H.264 8-bit 4:2:0 CFR with frequent keyframes and AAC audio when present. FFmpeg applies the source rotation during ingest. The manifest maps every zero-based proxy frame to its decoded source frame in presentation order and records gaps, repeated frames and the source SHA-256. Place a new source or conform under a new asset ID.
+The proxy uses H.264 at a constant frame rate, with frequent keyframes and AAC when the source has audio. FFmpeg applies source rotation. The manifest records the source SHA-256, original timestamps, and proxy-to-source frame mapping, including gaps and repeated frames.
+
+### Optional local transcription
+
+Transcribe with either command after ingest and before the next build.
 
 ```sh
-# Optional source-time transcript, with a local multilingual whisper.cpp model installed.
-node scripts/transcribe.mjs camera
-
-# Optional corrected subtitles. Time these against the original source.
-node scripts/transcribe.mjs camera --srt source/corrected.srt
-
-node scripts/build-review.mjs v1 review/footage --composition source/index.html
-lavish-axi review/footage/v1/review.html
-node scripts/poll-review.mjs review/footage/v1/review.html
+dailies-axi transcribe camera --language zh
+dailies-axi transcribe camera --srt source/corrected.srt
 ```
 
-Transcription uses local `whisper-cli` or `whisper-cpp`. Set `DAILIES_WHISPER` and `DAILIES_WHISPER_MODEL` to select the executable and multilingual model, or install the model under `~/.cache/hyperframes/whisper/models`. The script never downloads models. It defaults to Mandarin (`--language zh`). Automatic transcripts are drafts. The SRT override takes precedence in later builds, and older builds retain their own transcript snapshots.
+Automatic transcription uses local `whisper-cli` or `whisper-cpp` and defaults to Mandarin. Set `DAILIES_WHISPER` and `DAILIES_WHISPER_MODEL` to select the executable and a multilingual GGML model. You can also place the model under `~/.cache/hyperframes/whisper/models`. Dailies AXI never downloads a model. Corrected subtitles use original source times and take precedence over the automatic draft. Each build snapshots its transcripts.
 
 ## Review and revise
 
-1. Scrub or use the frame buttons. Click for a small box, or drag around an area. Drag on the timeline to select a range, or adjust its two frame fields. Draw a rectangle on a frame within that range to include a spatial reference. Use **Whole video** or **W** for a note on the full edit. A transcript line jumps to its frame, and Shift-click selects its range.
-2. **Send feedback to agent** submits a single batch via `window.lavish.queuePrompt()`. Keep `scripts/poll-review.mjs` attached while waiting for feedback. The wrapper runs `lavish-axi poll` and writes the first valid video batch to the version's immutable `notes.json`. Its companion script serves this snapshot to the Lavish iframe. Keep the poll output if you also need the surrounding Lavish conversation.
-3. Read the version in the payload before editing. Use each target's `file` and `selector` to locate DOM elements. Rectangles are normalized to the composition, and selectors and footage intersections are candidates. The EDL and note `source` spans describe output, proxy and original source frames. Ranges use `[frame, end_frame)`. `last_source_frame` is inclusive. `footage` gives the proxy and original frame for a rectangle and its normalized `rect_in_source` in the upright image. Source rectangles support axis-aligned placement and scale, including `object-fit` cropping. The same note can carry both footage and DOM targets.
-4. For a proxy frame grab, pass its snapshot and exact `media_frame` to the extractor. For a range, use the first, middle and last in-range frames as needed, following the EDL across cuts. Whole-video notes do not depend on a playhead thumbnail.
+1. In Lavish, scrub or step through frames, drag a rectangle over an area, drag on the timeline to mark a range, or use **Whole video** for a general note. Click transcript text to jump to its frame or Shift-click to select its range. Choose **Send feedback to agent** to submit the batch.
+2. Read the `dailies-axi poll` receipt and the version’s `notes.json`. The poll wrapper persists the first valid batch and locks that version’s review. It preserves the original Lavish receipt. If the batch was already locked, it prints the stored JSON.
+3. Check the version before editing. A note’s target file and selector locate candidate DOM elements. For footage, use `edl.json` and the note’s source spans to follow the edit across cuts. Ranges are half-open `[frame, end_frame)`. Source offsets use the original presentation timeline. A spatial anchor includes the exact `media_frame` and a normalized rectangle on the upright source when the placement supports it.
+4. For a frame grab, give the extractor the snapshot proxy and the note’s exact zero-based proxy frame.
 
    ```sh
    mkdir -p renders
-   node scripts/extract-frame.mjs review/footage/v1/media/camera.mp4 90 renders/check.jpg
+   dailies-axi frame review/v1/media/camera.mp4 90 renders/check.jpg
    ```
 
-5. Edit the working composition. A cut is a change to clip timing and order. Use the prior EDL to identify the original shot and source frame before changing the edit. Build the next version in the same output directory, optionally supplying a JSON object mapping preceding note IDs to outcome descriptions.
+5. Edit the working composition and build the next version after polling the preceding batch. Keep the same review output directory. Optionally supply an outcomes JSON object such as `{"N1":"Trimmed the pause by 12 frames"}`.
 
    ```sh
-   node scripts/build-review.mjs v2 review/footage --composition source/index.html \
-     --note "Shortened the pause" --outcomes notes/v2-outcomes.json
-   lavish-axi review/footage/v2/review.html
+   dailies-axi build v2 --note "Shortened the pause" --outcomes notes/v2-outcomes.json
+   dailies-axi review v2
+   dailies-axi poll v2
    ```
 
-   The new `version.json` records its parent, summary and outcomes. Open the old version to read its notes and see where each recorded outcome was handled. Reply to the previous Lavish session with the outcome and new local link, then end it with `lavish-axi end` when finished. Open and poll the new version for the next round.
+   Omit `--outcomes` if there’s no outcomes file. The new `version.json` records its parent, summary and outcomes. Lavish’s `reply` and `end` commands can close the previous session. If the reviewer chose **Send & End**, stop polling that session after reading its final receipt.
 
-The live preview uses the pinned HyperFrames runtime inside a sandboxed `srcdoc` iframe. The bridge resolves geometry inside the iframe and sends frame and region metadata over a `MessageChannel`. Recheck playback and targeting when upgrading the runtime. Footage review supports frame-aligned cuts and composition overlays. Pixel-level effects such as stabilization, grading and blur are outside this workflow.
+`build` defaults to `source/index.html` and writes to `review/vN/`. If no working composition exists, it uses the bundled animation. Use `--composition FILE` for another edit. If you use a custom media directory, pass the same `--media DIR` to ingest, transcribe, and build. If you pass a custom output directory to `build`, give `review` and `poll` its explicit `review.html` path. Paths resolve from the current directory. The runtime, GSAP and review page assets come from the installation.
 
-## Credits
+The original scripts remain available to developers. See the CLI help for the equivalent commands. Run `npm test` from the checkout.
 
-See [Third-party notices](THIRD_PARTY_NOTICES.md) for FrameJam, HyperFrames, GSAP and the local tool dependencies.
+## Install the agent skill
+
+From the clone, copy the bundled skill into the account-level directory for your agent. Start a new agent session to pick it up.
+
+```sh
+# Claude Code
+mkdir -p ~/.claude/skills
+cp -R skills/dailies-axi ~/.claude/skills/
+
+# Codex
+mkdir -p ~/.agents/skills
+cp -R skills/dailies-axi ~/.agents/skills/
+```
+
+The package also includes a root `plugin.json` for clients that support Agent Plugins. The skill uses the installed `dailies-axi` command and adds no server of its own.
+
+## License
+
+The project’s own code is [MIT licensed](LICENSE). See [third-party notices](THIRD_PARTY_NOTICES.md) for FrameJam, HyperFrames, GSAP, and the other dependencies.

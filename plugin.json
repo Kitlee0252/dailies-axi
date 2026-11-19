@@ -1,0 +1,8 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "dailies-axi",
+  "version": "0.1.0",
+  "description": "Local, frame-accurate video review for agents and reviewers.",
+  "license": "MIT",
+  "keywords": ["axi", "cli", "video", "review"]
+}

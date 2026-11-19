@@ -3,7 +3,8 @@
 // MIT License, Copyright (c) 2026 Moritz Kremb. See third_party/framejam/LICENSE.
 import { constants } from 'node:fs';
 import { copyFile, mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
-import { basename, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
+import { createRequire } from 'node:module';
 import { parseArgs } from 'node:util';
 import { compositionEdl } from './composition-edl.mjs';
 import { readManifest, writeJson } from './manifest.mjs';
@@ -20,13 +21,15 @@ if (!/^v[1-9]\d*$/.test(version ?? '') || extra) {
 }
 const here = path => new URL(`../${path}`, import.meta.url);
 const text = path => readFile(here(path), 'utf8');
-const gsapPath = 'node_modules/gsap/dist/gsap.min.js';
+const require = createRequire(import.meta.url);
+const gsapPath = require.resolve('gsap/dist/gsap.min.js');
+const runtimePath = join(dirname(require.resolve('hyperframes/package.json')), 'dist', 'hyperframe.runtime.iife.js');
 const gsapBanner = '/*! GSAP 3.15.1 — GreenSock Standard License — https://gsap.com/standard-license/ */\n';
 const runtimeBanner = '/*! HyperFrames 0.9.69 — Apache-2.0 — https://github.com/heygen-com/hyperframes */\n';
 const [composition, gsap, runtime, template, regions, review, bridge, edlCode, transcriptCode, spokenCode, feedbackCode] =
   await Promise.all([
     values.composition ? readFile(resolve(values.composition), 'utf8') : text('composition/index.html'),
-    text(gsapPath), text('node_modules/hyperframes/dist/hyperframe.runtime.iife.js'), text('scripts/review.html'),
+    readFile(gsapPath, 'utf8'), readFile(runtimePath, 'utf8'), text('scripts/review.html'),
     text('scripts/regions.mjs'), text('scripts/review.mjs'), text('scripts/composition-bridge.js'), text('scripts/edl.mjs'),
     text('scripts/transcript.mjs'), text('scripts/spoken.mjs'), text('scripts/feedback-format.mjs'),
   ]);
