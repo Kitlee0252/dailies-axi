@@ -56,13 +56,13 @@ async function ingest(args, options, file) {
     const result = JSON.parse(await script('./ingest.mjs', [...args, ...flags(options)]));
     const updated = await populateStarter(file, result);
     const mediaFlag = options.media ? ` --media ${fileArg(options.media)}` : '';
-    print({ ...result, media: options.media ?? join(process.cwd(), 'media'),
+    return { ...result, media: options.media ?? join(process.cwd(), 'media'),
       ...(updated ? { composition: file } : {}),
       next_step: updated ? `Optionally transcribe the asset, then run dailies-axi build v1${mediaFlag}.`
-        : 'Add the asset to the composition if needed, then build the next review version.' });
+        : 'Add the asset to the composition if needed, then build the next review version.' };
   };
-  if (await isFootageStarter(await readComposition(file))) await withStarterLock(file, execute);
-  else await execute();
+  if (await isFootageStarter(await readComposition(file))) return withStarterLock(file, execute);
+  return execute();
 }
 
 async function build(args, options, file) {
@@ -87,16 +87,50 @@ async function build(args, options, file) {
   }
   await script('./build-review.mjs', [...args, ...flags(options)]);
   const review_file = join(root, version, 'review.html');
-  print({ version, review_file, next_step: `Run dailies-axi review ${fileArg(review_file)}.` });
+  return { version, review_file, next_step: `Run dailies-axi review ${fileArg(review_file)}.` };
 }
 
 async function review(file, options) {
+  if (!(await stat(file)).isFile()) throw new Error(`Not a review file: ${file}`);
   const result = decode(await run('lavish-axi', [file, ...flags(options)], true));
   if (result.session?.status !== 'user-ended' && result.session?.file && result.next_step) {
     result.next_step = result.next_step.replace(`lavish-axi poll ${result.session.file}`, () =>
       `dailies-axi poll ${fileArg(file)}`);
   }
-  print(result);
+  return result;
+}
+
+function poll(file, options = {}) {
+  return script('./poll-review.mjs', [file, ...flags(options)], false);
+}
+
+async function open(video, workspace, options) {
+  if (!(await stat(video)).isFile()) throw new Error(`Not a video file: ${video}`);
+  await mkdir(dirname(workspace), { recursive: true, mode: 0o700 });
+  try {
+    await mkdir(workspace, { mode: 0o700 });
+  } catch (error) {
+    if (error.code === 'EEXIST') {
+      throw new Error(`Workspace already exists: ${workspace}. Choose a new workspace or use the individual commands to continue there.`);
+    }
+    throw error;
+  }
+
+  await initWorkspace(workspace);
+  const file = compositionPath(workspace);
+  const media = join(workspace, 'media');
+  const { asset, version } = options;
+  await ingest([video, asset], { media }, file);
+  const { review_file } = await build([version, join(workspace, 'review')], { media, 'initial-version': true }, file);
+  const result = await review(review_file, {});
+  const ended = result.session?.status === 'user-ended';
+  if (!ended && !result.session?.url) throw new Error('Lavish did not return a review link.');
+  if (!ended) result.next_step = options['no-poll'] ? `Run dailies-axi poll ${fileArg(review_file)} to collect feedback.`
+    : 'Waiting for feedback. In Lavish, choose Send feedback to agent.';
+
+  const receipt = encode({ workspace, asset, version, review_file, ...result });
+  await new Promise((resolve, reject) => process.stdout.write(`${receipt}\n`, error => error ? reject(error) : resolve()));
+  if (!ended && !options['no-poll']) return poll(review_file);
 }
 
 function doctor(options) {
@@ -116,7 +150,7 @@ function doctor(options) {
       'Install a multilingual GGML model or set DAILIES_WHISPER_MODEL.', false),
   ];
   const ok = checks.every(item => !item.required || item.status === 'ok');
-  print({ status: ok ? 'ready' : 'missing', node_version: process.version, checks, next_step: ok ? 'Run dailies-axi init in your project.'
+  print({ status: ok ? 'ready' : 'missing', node_version: process.version, checks, next_step: ok ? 'Run dailies-axi open <video> in your project.'
     : 'Fix missing required checks and run dailies-axi doctor again.' });
   if (!ok) process.exitCode = 1;
 }
@@ -131,7 +165,7 @@ async function main() {
       description: 'Prepare local video dailies and collect frame-accurate feedback in Lavish.',
       usage: 'dailies-axi <command> [arguments]',
       commands: Object.values(commands).map(({ usage, description }) => ({ usage, description })),
-      next_step: 'Run dailies-axi doctor, then dailies-axi init (or init --sample) in your working directory.',
+      next_step: 'Run dailies-axi doctor, then dailies-axi open <video>.',
       privacy: 'Keep footage and review artifacts local. Never share or export them through Lavish.',
     });
   }
@@ -139,6 +173,7 @@ async function main() {
 
   const file = compositionPath(process.cwd());
   switch (command) {
+    case 'open': return open(...args, options);
     case 'init': {
       const [workspace] = args;
       const created = await initWorkspace(workspace, options.sample);
@@ -147,19 +182,15 @@ async function main() {
           : options.sample ? 'From the workspace, run dailies-axi build v1.'
           : 'From the workspace, run dailies-axi ingest <source-file> <asset-id>.' });
     }
-    case 'ingest': return ingest(args, options, file);
-    case 'build': return build(args, options, file);
+    case 'ingest': return print(await ingest(args, options, file));
+    case 'build': return print(await build(args, options, file));
     case 'transcribe': {
       const output = await script('./transcribe.mjs', [...args, ...flags(options)]);
       return print({ asset: args[0], result: output.trim(),
         next_step: 'Build the next review version to include the transcript.' });
     }
-    case 'review': {
-      const [page] = args;
-      if (!(await stat(page)).isFile()) throw new Error(`Not a review file: ${page}`);
-      return review(page, options);
-    }
-    case 'poll': return script('./poll-review.mjs', [...args, ...flags(options)], false);
+    case 'review': return print(await review(args[0], options));
+    case 'poll': return poll(args[0], options);
     case 'frame': {
       await script('./extract-frame.mjs', args);
       return print({ image: args[2], frame: Number(args[1]), next_step: 'Inspect this image alongside the review note and EDL.' });

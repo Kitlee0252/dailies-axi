@@ -1,4 +1,4 @@
-import { basename, resolve } from 'node:path';
+import { basename, extname, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 
 const version = /^v[1-9]\d*$/;
@@ -7,6 +7,12 @@ const frame = /^\d+$/;
 const optionTypes = { string: { type: 'string' }, boolean: { type: 'boolean' }, path: { type: 'string' } };
 
 export const commands = {
+  open: {
+    usage: 'open <video> [workspace-dir] [--asset ID] [--version vN] [--no-poll]',
+    description: 'Create a new private <video-name>-review workspace, ingest as cut, open v1 in Lavish and wait for feedback. Use --no-poll to exit after opening.',
+    positionals: [{ path: true }, { path: true, optional: true }],
+    flags: { asset: 'string', version: 'string', 'no-poll': 'boolean' },
+  },
   init: {
     usage: 'init [directory] [--sample]',
     description: 'Create source/ and media/ and copy a starter composition. Use --sample for Night Signal.',
@@ -76,6 +82,7 @@ export function parseCommand([command, ...argv], cwd = process.cwd()) {
   if (positionals.length > spec.positionals.length) throw new Error(usage);
   const args = spec.positionals.map((arg, i) => {
     const value = positionals[i] ?? arg.default;
+    if (value === undefined && arg.optional) return;
     if (!value || (arg.pattern && !arg.pattern.test(value))) throw new Error(usage);
     if (arg.review) {
       if (version.test(value)) return resolve(cwd, 'review', value, 'review.html');
@@ -88,5 +95,15 @@ export function parseCommand([command, ...argv], cwd = process.cwd()) {
     if (!value) throw new Error(`--${name} requires a path.\n${usage}`);
     return [name, resolve(cwd, value)];
   }));
+  if (command === 'open') {
+    const [video] = args;
+    args[1] ??= resolve(cwd, `${basename(video, extname(video))}-review`);
+    flags.asset ??= 'cut';
+    flags.version ??= 'v1';
+    if (!asset.test(flags.asset)) throw new Error(`Invalid asset ID: ${flags.asset}\n${usage}`);
+    if (!version.test(flags.version) || !Number.isSafeInteger(Number(flags.version.slice(1)))) {
+      throw new Error(`Invalid starting version: ${flags.version}\n${usage}`);
+    }
+  }
   return { command, args, options: flags };
 }

@@ -14,6 +14,7 @@ const { positionals: [version, outputRoot = 'review', extra], values } = parseAr
   allowPositionals: true, options: {
     composition: { type: 'string' }, media: { type: 'string', default: 'media' },
     note: { type: 'string', default: '' }, outcomes: { type: 'string' },
+    'initial-version': { type: 'boolean' },
   },
 });
 if (!/^v[1-9]\d*$/.test(version ?? '') || extra) {
@@ -50,7 +51,6 @@ for (const [id, asset] of Object.entries(assets)) {
 const root = resolve(outputRoot);
 const folder = join(root, version);
 const number = Number(version.slice(1));
-const parent = number > 1 ? `v${number - 1}` : null;
 await mkdir(root, { recursive: true });
 const lock = join(root, '.build-lock');
 await mkdir(lock);
@@ -59,7 +59,11 @@ try {
   const existing = (await readdir(root, { withFileTypes: true }))
     .filter(entry => entry.isDirectory() && /^v[1-9]\d*$/.test(entry.name))
     .map(entry => Number(entry.name.slice(1)));
-  if (number !== 1 + Math.max(0, ...existing)) throw new Error('Build the next version in order; existing versions are immutable');
+  const latest = Math.max(0, ...existing);
+  // The open command requests a starting number for a fresh review.
+  const startsReview = values['initial-version'] && latest === 0;
+  if (!startsReview && number !== latest + 1) throw new Error('Build the next version in order; existing versions are immutable');
+  const parent = latest ? `v${latest}` : null;
   const previous = parent ? await readNotes(join(root, parent)) : null;
   if (parent && !previous) throw new Error(`Poll and lock ${parent}'s feedback before building ${version}`);
   const outcomes = values.outcomes ? JSON.parse(await readFile(resolve(values.outcomes), 'utf8')) : {};

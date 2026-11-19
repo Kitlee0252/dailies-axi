@@ -16,23 +16,19 @@ dailies-axi doctor
 
 With the clone on disk and npm’s global bin directory on your `PATH`, `dailies-axi` works from any directory. Use `dailies-axi --help` for the command list and `dailies-axi <command> --help` for options. Doctor exits with status 1 when a required tool is missing. Whisper and its model are optional.
 
-## Animation quick start
-
-Choose a directory for the sample workspace and its review builds.
-
-```sh
-dailies-axi init night-signal --sample
-cd night-signal
-dailies-axi build v1
-dailies-axi review v1
-dailies-axi poll v1
-```
-
-This opens the 24-second Night Signal composition in Lavish. Keep the poll attached while the reviewer marks the page and submits feedback.
-
 ## Footage quick start
 
 **Never use `lavish-axi share` or `lavish-axi export` on footage reviews, including through the Lavish browser menu.** Use a private workspace outside the tool checkout. Keep originals, proxies, frame grabs, transcripts, review builds, and feedback off Git and out of uploads. For machine-local reviews, configure Lavish to listen only on loopback. Lavish can bind a Tailscale address by default. [Lavish network configuration](https://github.com/kunchenguid/lavish-axi#how-it-works)
+
+```sh
+dailies-axi open /path/to/rough-cut.mp4
+```
+
+From your working directory, this creates `rough-cut-review/`, ingests the video as `cut`, builds `v1`, and opens it in Lavish. The command prints the review link under `session.url` before waiting in the foreground for feedback. Use `dailies-axi open /path/to/rough-cut.mp4 my-review --no-poll` to return after opening, then run `dailies-axi poll my-review/review/v1/review.html` when ready.
+
+Pass a second path to name the workspace, `--asset ID` to name the proxy, or `--version vN` to choose the initial version number. Later builds follow that number in order and require locked feedback on the preceding version. If the workspace path already exists, `open` refuses. Use the individual commands below to continue in an existing workspace, including after a partial run.
+
+### Run the steps individually
 
 ```sh
 dailies-axi init my-review
@@ -58,6 +54,18 @@ dailies-axi transcribe camera --srt source/corrected.srt
 ```
 
 Automatic transcription uses local `whisper-cli` or `whisper-cpp` and defaults to Mandarin. Set `DAILIES_WHISPER` and `DAILIES_WHISPER_MODEL` to select the executable and a multilingual GGML model. You can also place the model under `~/.cache/hyperframes/whisper/models`. Dailies AXI never downloads a model. Corrected subtitles use original source times and take precedence over the automatic draft. Each build snapshots its transcripts.
+
+## Animation quick start
+
+```sh
+dailies-axi init night-signal --sample
+cd night-signal
+dailies-axi build v1
+dailies-axi review v1
+dailies-axi poll v1
+```
+
+This opens the 24-second Night Signal composition in Lavish. Keep the poll attached while the reviewer marks the page and submits feedback.
 
 ## Review and revise
 
