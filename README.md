@@ -1,39 +1,34 @@
 # Video feedback loop MVP
 
-A local, manual agent loop: watch a version, mark feedback, receive it via Lavish, edit JSON, and render another version. Requires macOS (AppKit/Swift and Arial), Python 3, `/opt/homebrew/bin/ffmpeg`, and `lavish-axi`. No Python packages or server are required. The synthetic clip uses FFmpeg's `testsrc2` with its running frame/time display and a 440 Hz tone.
+The goal is to let a reviewer point to *this thing, here, at this moment*, explain the change, and see it in the next version. A timestamp alone leaves the agent guessing which object to edit; a region on the live HyperFrames composition preserves both the visual location and the editable source target.
 
-## Run the loop
+## Local review loop
 
-From the project root:
-
-```sh
-./scripts/sample.sh
-# edits/v1.json is the initial example; edit it as needed
-./scripts/render.py edits/v1.json
-./scripts/build_review.py v1
-lavish-axi review/v1.html
-lavish-axi poll review/v1.html
-```
-
-Play the video; mark a point or mark start and then end, write a note, and add it. The send button queues one `video-review` prompt and immediately calls `sendQueuedPrompts()`; `poll` returns its structured context as part of the prompt. Poll consumes each batch. The reviewer can delete local notes before sending. In a normal interactive loop, leave `poll` in the foreground until feedback arrives; do not use a detached poll. If a session is ended by the reviewer, follow Lavish's reopen rules.
-
-For each returned note, check its `version` and consult `renders/v1.map.json`. Point notes include `segment_id` and `source_time`; ranges include the segment IDs they intersect and start/end locations. Segment boundaries are half-open except the final endpoint. Range end locations at a cut refer to the next segment, while `segment_ids` lists segments actually covered. Output timestamps describe the reviewed version, so do not reuse them blindly after a cut. Interpret the requested change, copy the edit list to `edits/v2.json`, change its version and the relevant cuts, text, position, or volume, then:
+Requires Node 26, npm, FFmpeg on `PATH`, a browser supported by HyperFrames, and `lavish-axi`. No account, cloud rendering, or standing watcher is required. Run from the repository root:
 
 ```sh
-./scripts/render.py edits/v2.json
-./scripts/build_review.py v2
-lavish-axi review/v2.html
-lavish-axi poll review/v2.html
+npm ci
+npm test
+mkdir -p renders notes
+node scripts/build-review.mjs v1
+DO_NOT_TRACK=1 npx --no-install hyperframes lint review/v1/composition
+DO_NOT_TRACK=1 npx --no-install hyperframes render review/v1/composition --fps 24 --output "$PWD/renders/v1.mp4"
+lavish-axi review/v1/review.html
+set -o pipefail
+lavish-axi poll review/v1/review.html --owner video-review | tee -a notes/received.log
 ```
 
-Repeat for subsequent versions. Optionally save the returned feedback as a JSON file under ignored `notes/`; never assume it has been saved automatically. The examples demonstrate moving the v1 subtitle from bottom to top in v2.
+The 24-second Night Signal sample has a title, caption, animated orbit, and background. You can also use `npx --no-install hyperframes preview review/v1/composition --no-open` to inspect the standalone composition. Rendering is for an export or a frame check; the Lavish review page itself can open without it.
 
-## Edit list
+1. Play and pause or scrub to a frame. Drag around an area, or click for a small box. Type in the popup and add the note. Select a note’s frame button to return to its marker, or delete the note before sending.
+2. **Send feedback to agent** packages the notes together and sends through `window.lavish.queuePrompt()`. Keep `poll` attached to the agent turn; it consumes the response, which `tee -a` appends to the local notes log. Don’t claim someone is listening just because the review link is live.
+3. Read the `video-review` prompt’s JSON context. Verify the version, then use each target’s `file` and `selector` in the source. If `targets` is empty, use the normalized region and frame to locate the requested change. Don’t treat timestamps or rectangles as stable across different edits.
+4. Edit `composition/index.html` and keep stable IDs for existing elements. Build `v2`, repeat lint/render with the `v2` paths, check the requested frames, and run `lavish-axi review/v2/review.html`. Reply to the previous Lavish session with the outcome and the new link. Poll the new version when ready for another batch; when handing off without listening, leave the review session open but do not start a detached poll.
 
-`edits/v1.json` is the compact example. `version` is alphanumeric and names outputs; `source` is a project-relative file with video and audio. `segments` is an ordered non-empty list of `{id, in, out, volume}`: source times are seconds, `out` is exclusive, IDs must be unique and stable across versions, and `volume` is optional (default 1). Remove or shorten segments to cut, and preserve IDs when their identity survives. The top-level `volume` defaults to 1 and multiplies each segment's volume. `subtitles` and `overlays` are lists of `{start, end, text, position}` in **output seconds**, with position `top`, `center`, or `bottom`. Both are burned-in text in this MVP. Overlaps are rendered in list order. The source should use a constant frame rate; times are subject to frame/audio sample rounding. The renderer concatenates kept segments and writes `renders/vN.mp4` and `renders/vN.map.json`.
+## Why a live frame
 
-The installed FFmpeg lacks `drawtext`, so the renderer uses macOS AppKit through Swift to make local transparent text images, then overlays them with FFmpeg. Source media, generated text images, renders, review pages and optional notes are ignored by Git. The review builder embeds the MP4 as a data URL so each page is self-contained. In the actual Lavish sandbox, Chrome loaded the embedded H.264/AAC MP4, played it, and the mark button read a nonzero `currentTime`; the simulated point note arrived through `poll`. This was tested with `chrome-devtools-axi` using the page's controls. Embedding is intended for small clips and makes large pages unsuitable for long footage. The page uses a small self-contained stylesheet because the MVP explicitly requires a single self-contained HTML file.
+The builder snapshots the same HTML and pinned GSAP used by the HyperFrames export, then embeds that HTML and the pinned HyperFrames runtime in the Lavish review artifact. No rendered video is embedded. Existing output directories are not overwritten, so a version label keeps pointing to the composition the reviewer actually saw. Pass an optional output directory to `build-review.mjs` to keep artifacts outside the repository.
 
-## Evidence
+In Chrome inside Lavish, direct DOM access from the review page to the nested composition iframe failed under Lavish’s opaque-origin sandbox. A private `MessageChannel` worked without granting same-origin access: the review UI sends a frame or selection to the composition, and the composition seeks via the pinned runtime’s `__player` interface before reading its own DOM. The bridge is coupled to this runtime version; recheck playback and targeting when upgrading.
 
-The local proof directory contains the Lavish screenshot, received poll output and v1/v2 frames at the feedback time. Both renders were probed as 30-second H.264/AAC files; frame grabs show the subtitle moved from bottom to top. These generated artifacts are not committed.
+Each note carries the version, zero-based frame number, seconds (`frame / fps`), and `{x, y, width, height}` as fractions of the composition. Targets are visible, intersecting elements tagged `data-review-target` with stable IDs. The center hit ranks first when available; bounds can yield multiple candidates, so a selector is evidence, not proof of reviewer intent. Targets include file, ID, selector, tag, text snippet, and selected computed styles. The background is intentionally not a target, so an unoccupied region still works. Bounds are not pixel masks; frame crops are not included in the payload. Use the version’s rendered MP4 to make a frame grab where needed. The portable builder is scoped to this self-contained HTML/CSS/GSAP sample; external media ingestion is not implemented.

@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Northstar · Night Signal</title>
+  <style>
+    * { box-sizing: border-box }
+    body { margin: 0; color: #f5f6ff; font-family: system-ui, sans-serif }
+    #film { position: relative; width: 960px; height: 540px; overflow: hidden; background: #10132a }
+    #atmosphere { position: absolute; inset: 0; background: radial-gradient(ellipse at 66% 42%, #46327a 0%, #171731 54%, #0a0e20 88%) }
+    #orbit { position: absolute; top: 76px; left: 586px; width: 233px; height: 233px; border: 1px solid #b398ff; border-radius: 50%; box-shadow: inset 0 0 58px #ad87fb65, 0 0 50px #7d53e75c }
+    #orbit::after { content: ''; position: absolute; inset: 22px; border: 1px dashed #c3a9fb80; border-radius: 50% }
+    #eyebrow { position: absolute; top: 146px; left: 72px; color: #c4adff; font-size: 16px; font-weight: 700; letter-spacing: .27em }
+    #title { position: absolute; top: 172px; left: 68px; margin: 0; color: #ffda72; font-size: 86px; line-height: 1.05; letter-spacing: -.06em }
+    #caption { position: absolute; left: 72px; bottom: 64px; margin: 0; padding-left: 15px; border-left: 3px solid #b398ff; color: #e1d8fb; font-size: 23px }
+    #northstar-logo { position: absolute; left: 804px; top: 428px; width: 116px; height: 55px }
+  </style>
+</head>
+<body>
+  <div id="film" data-composition-id="night-signal" data-start="0" data-duration="24" data-width="960" data-height="540" data-fps="24">
+    <div id="atmosphere"></div>
+    <div id="orbit" data-review-target></div>
+    <div id="eyebrow" data-review-target>NORTHSTAR / TRANSMISSION 01</div>
+    <h1 id="title" data-review-target>Night Signal</h1>
+    <p id="caption" data-review-target>Follow the signal beyond the horizon.</p>
+    <svg id="northstar-logo" data-review-target viewBox="0 0 116 55" role="img" aria-label="Northstar logo">
+      <rect x=".5" y=".5" width="115" height="54" rx="13" fill="#1b1835" stroke="#a68cff"/>
+      <path d="M22 14l3.5 10 10 3.5-10 3.5L22 41l-3.5-10-10-3.5 10-3.5z" fill="#ffda72"/>
+      <text x="43" y="31" fill="#f5f6ff" font-family="system-ui, sans-serif" font-size="10" font-weight="750" letter-spacing=".8">NORTHSTAR</text>
+    </svg>
+  </div>
+  <script src="gsap.min.js"></script>
+  <script>
+    const timeline = gsap.timeline({ paused: true });
+    timeline.from('#title', { y: 30, opacity: 0, duration: 1.2 }, 0);
+    timeline.from('#caption', { opacity: 0, duration: 1.4 }, 1);
+    timeline.to('#orbit', { x: 48, y: 88, scale: 1.12, ease: 'sine.inOut', duration: 12 }, 0);
+    timeline.to('#orbit', { x: 6, y: 16, scale: 1, ease: 'sine.inOut', duration: 12 }, 12);
+    window.__timelines = { 'night-signal': timeline };
+  </script>
+</body>
+</html>

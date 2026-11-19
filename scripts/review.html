@@ -1,15 +1,75 @@
-<!doctype html><html lang="en" data-lavish-annotate="off"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Video review</title><style>
-*{box-sizing:border-box}body{margin:0;background:#111820;color:#eff4f6;font:16px system-ui}main{max-width:950px;margin:auto;padding:24px}h1{margin-bottom:4px}p{color:#acbec7}video{width:100%;background:#000;max-height:55vh}button,textarea{font:inherit}button{background:#d4edeb;border:0;border-radius:7px;padding:10px 14px;cursor:pointer}button.secondary{background:#33434c;color:white}textarea{width:100%;min-height:90px;margin:12px 0;background:#1f2c34;color:white;border:1px solid #6b818b;border-radius:6px;padding:10px}.actions{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0}li{padding:10px;border-bottom:1px solid #43535c;overflow-wrap:anywhere}li button{float:right}#status{min-height:1.5em;color:#a8dbcf}
-</style></head><body><main><h1>Video review · <span id="version"></span></h1><p>Watch, mark a moment or range, and add a note. Times refer to this version.</p><video id="video" controls preload="metadata" src="__VIDEO__"></video><div class="actions"><button id="point">Mark current time</button><button class="secondary" id="start">Mark range start</button><button class="secondary" id="end">Mark range end</button></div><div id="mark">No time marked</div><label for="text">Feedback</label><textarea id="text" placeholder="What should change?"></textarea><div class="actions"><button id="add">Add note</button></div><h2>Notes</h2><ol id="notes"></ol><button id="send">Send feedback to agent</button><p id="status" role="status"></p></main><script>
-const map=__MAP__, version=map.version, video=document.querySelector('#video'), notes=[]; let mark=null, rangeStart=null;
-document.querySelector('#version').textContent=version;
-const $=s=>document.querySelector(s), fmt=t=>`${Math.floor(t/60).toString().padStart(2,'0')}:${(t%60).toFixed(1).padStart(4,'0')}`;
-function locate(t){let s=map.segments.find(x=>t>=x.output_start && t<x.output_end) || (t===map.segments.at(-1).output_end?map.segments.at(-1):null);return s?{segment_id:s.id,source_time:+(s.source_start+t-s.output_start).toFixed(3)}:null}
-function update(){ $('#mark').textContent=mark ? (mark.time!==undefined?`Point ${fmt(mark.time)}`:`Range ${fmt(mark.start)} – ${fmt(mark.end)}`) : rangeStart!==null?`Range starts ${fmt(rangeStart)}; mark the end.`:'No time marked'; }
-$('#point').onclick=()=>{mark={time:video.currentTime};rangeStart=null;update()};
-$('#start').onclick=()=>{rangeStart=video.currentTime;mark=null;update()};
-$('#end').onclick=()=>{if(rangeStart===null || video.currentTime<=rangeStart){$('#status').textContent='Mark a start, then an end later than the start.';return}mark={start:rangeStart,end:video.currentTime};rangeStart=null;update()};
-function render(){const list=$('#notes');list.replaceChildren();notes.forEach((n,i)=>{const li=document.createElement('li'), del=document.createElement('button');del.textContent='Delete';del.className='secondary';del.onclick=()=>{notes.splice(i,1);render()};li.append(del,document.createTextNode((n.time!==undefined?fmt(n.time):`${fmt(n.start)} – ${fmt(n.end)}`)+` · ${n.text}`));list.append(li)})}
-$('#add').onclick=()=>{let text=$('#text').value.trim();if(!mark||!text){$('#status').textContent='Mark a time and enter feedback first.';return}let n={...mark,text};if(n.time!==undefined)Object.assign(n,locate(n.time)||{});else {n.start_location=locate(n.start);n.end_location=locate(n.end);n.segment_ids=map.segments.filter(s=>s.output_start<n.end && s.output_end>n.start).map(s=>s.id)}notes.push(n);mark=null;$('#text').value='';$('#status').textContent='Note added locally.';update();render()};
-$('#send').onclick=()=>{if(!notes.length){$('#status').textContent='Add at least one note.';return}if(!window.lavish?.queuePrompt){$('#status').textContent='Open this page with lavish-axi to send.';return}window.lavish.queuePrompt('Apply the video review feedback for '+version,{tag:'video-review',text:`${notes.length} video review note(s) for ${version}`,data:{version,notes:structuredClone(notes)},queueKey:'video-review-'+version});window.lavish.sendQueuedPrompts();$('#status').textContent='Feedback sent to Lavish.'};
-</script></body></html>
+<!doctype html>
+<html lang="en" data-lavish-annotate="off">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Night Signal · Frame review</title>
+  <style>
+    * { box-sizing: border-box }
+    :root { color-scheme: dark; font: 16px system-ui; color: #f1edff; background: #11111b; --muted: #beb7d0; --mint: #b8f3d8; --line: #413a53 }
+    body { margin: 0 }
+    main { max-width: 1024px; margin: auto; padding: 24px }
+    h1 { margin: 2px 0 6px; font-size: clamp(1.65rem, 4vw, 2.45rem) }
+    h2 { font-size: 1.15rem }
+    p { color: var(--muted); margin: 0 0 14px }
+    .eyebrow { color: var(--mint); font-size: .73rem; font-weight: 700; letter-spacing: .16em; text-transform: uppercase }
+    #canvas { width: min(100%, 104vh); margin: 0 auto; position: relative; aspect-ratio: 16 / 9; isolation: isolate; background: #19172c; outline: 1px solid var(--line); border-radius: 8px; overflow: hidden }
+    #composition { position: absolute; inset: 0; transform-origin: top left; border: 0; pointer-events: none }
+    #surface, #markers { position: absolute; inset: 0 }
+    #surface { cursor: crosshair; touch-action: none }
+    #markers { pointer-events: none }
+    .region { position: absolute; border: 2px solid var(--mint); background: #b8f3d822 }
+    .region b { position: absolute; left: 0; top: 0; background: var(--mint); color: #131824; font: bold 12px system-ui; padding: 1px 5px }
+    #composer { position: absolute; z-index: 1; width: min(330px, calc(100% - 16px)); padding: 12px; border: 1px solid var(--line); border-radius: 9px; background: #211d30; box-shadow: 0 8px 32px #0009 }
+    #stage { position: relative }
+    button, textarea, input { font: inherit }
+    button { border: 1px solid var(--line); border-radius: 6px; padding: 7px 11px; background: #262236; color: inherit; cursor: pointer }
+    button.primary { background: var(--mint); color: #131824; font-weight: 700 }
+    button:disabled { opacity: .5; cursor: default }
+    :focus-visible { outline: 2px solid #c4adff; outline-offset: 2px }
+    textarea { display: block; resize: vertical; width: 100%; min-height: 66px; margin: 7px 0; padding: 6px; background: #141222; color: inherit; border: 1px solid var(--line); border-radius: 4px }
+    .row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px }
+    .transport { margin: 12px 0; padding-bottom: 12px; border-bottom: 1px solid var(--line) }
+    #seek { flex: 1; min-width: 100px; accent-color: var(--mint) }
+    output { font-variant-numeric: tabular-nums; min-width: 126px; font-size: .86rem }
+    #targets { margin: 5px 0; font-size: .82rem }
+    #notes { padding-left: 26px }
+    #notes li { margin: 6px 0; border-bottom: 1px solid var(--line); padding: 5px 0; overflow-wrap: anywhere }
+    #notes li p { white-space: pre-wrap; margin: 6px 0 }
+    #status { margin: 8px 0; min-height: 1.5em }
+  </style>
+</head>
+<body>
+<main>
+  <div class="eyebrow">Northstar / Frame review / <span id="version"></span></div>
+  <h1>Point to what should change</h1>
+  <p>Scrub or play, then click for a small box or drag around any part of the frame.</p>
+  <div id="stage">
+    <div id="canvas">
+      <iframe id="composition" title="Live HyperFrames composition" sandbox="allow-scripts" tabindex="-1"></iframe>
+      <div id="markers" aria-hidden="true"></div>
+      <div id="surface" data-lavish-action></div>
+    </div>
+    <form id="composer" hidden>
+      <label for="feedback">What should change here?</label>
+      <p id="targets"></p>
+      <textarea id="feedback" required maxlength="1000" placeholder="Describe the change you want…"></textarea>
+      <div class="row"><button class="primary" type="submit">Add note</button><button id="cancel" type="button">Cancel</button></div>
+    </form>
+  </div>
+  <div class="row transport">
+    <button id="play" disabled>Play</button>
+    <button id="previous" aria-label="Previous frame" disabled>−1</button>
+    <button id="next" aria-label="Next frame" disabled>+1</button>
+    <input id="seek" type="range" min="0" max="0" value="0" aria-label="Frame" disabled>
+    <output id="time" for="seek"></output>
+  </div>
+  <h2>Notes <span id="count"></span></h2>
+  <p id="empty">No notes yet. Select a region to add one.</p>
+  <ol id="notes"></ol>
+  <button id="send" class="primary" disabled>Send feedback to agent</button>
+  <p id="status" role="status">Loading live composition…</p>
+</main>
+<!-- REVIEW_SCRIPT -->
+</body>
+</html>
