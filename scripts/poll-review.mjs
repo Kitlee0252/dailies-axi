@@ -78,6 +78,9 @@ async function handoff(record) {
       'edl.json maps composition frames to proxy and source frames and lists shot cuts; ' +
       (transcripts.length ? 'the transcripts give word timings in source seconds. ' : '') +
       `Then, from ${quote(workspace)}, run dailies-axi build ${buildArgs} --note "<summary>" --outcomes <file> ` +
-      `with a JSON object mapping each note ID to what changed, and dailies-axi review ${reviewArg}.`,
+      `with a JSON object mapping each note ID to text or { note, frame, end_frame? } in ${next}, and dailies-axi review ${reviewArg}.` +
+      (hasComposition && defaultRoot
+        ? ` Or run dailies-axi open ${quote(composition)} --note "<summary>" --outcomes <file> to build, open and poll in one step.`
+        : ''),
   };
 }

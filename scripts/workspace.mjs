@@ -1,5 +1,5 @@
 import { constants } from 'node:fs';
-import { copyFile, mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -55,4 +55,16 @@ export async function populateStarter(file, ingest) {
   } finally {
     await rm(stage, { recursive: true, force: true });
   }
+}
+
+export async function latestVersion(root) {
+  let entries;
+  try {
+    entries = await readdir(root, { withFileTypes: true });
+  } catch (error) {
+    if (error.code === 'ENOENT') return 0;
+    throw error;
+  }
+  return entries.reduce((latest, entry) => entry.isDirectory() && /^v[1-9]\d*$/.test(entry.name)
+    ? Math.max(latest, Number(entry.name.slice(1))) : latest, 0);
 }

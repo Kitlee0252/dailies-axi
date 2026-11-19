@@ -232,3 +232,53 @@ test('ingest records hard cuts and the next version posts its link in the previo
   spawnSync(process.execPath, [bin, 'review', 'v2'], { cwd: workspace, env, encoding: 'utf8' });
   assert.equal((await readFile(join(cwd, 'replies.log'), 'utf8')).trim().split('\n').length, 1);
 });
+
+test('open ingests two composition originals, reuses them in v2 and snapshots exact outcome frames', { timeout: 20000 }, async t => {
+  const { cwd, env } = await openFixture(t);
+  const input = join(cwd, 'edit.htm');
+  const author = `<!doctype html><body><main data-composition-id="edit" data-width="96" data-height="64"
+    data-fps="30" data-duration-frame="24">
+    <video id="a" data-review-clip="camera-a" src="rough cut.mp4" muted
+      data-start-frame="0" data-duration-frame="11"></video>
+    <video id="b" data-review-clip="camera-b" src="media/camera-b.mp4" data-review-source="take b.mp4"
+      muted data-start-frame="11" data-duration-frame="13" data-media-start-frame="2"></video>
+    </main></body>`;
+  await writeFile(input, author);
+  await writeFile(join(cwd, 'take b.mp4'), await readFile(join(cwd, 'rough cut.mp4')));
+  const invoke = (...args) => spawnSync(process.execPath, [bin, ...args], { cwd, env, encoding: 'utf8' });
+  const first = invoke('open', 'edit.htm', '--no-transcribe');
+  assert.equal(first.status, 0, first.stderr);
+  const v1 = join(cwd, 'edit-review', 'review', 'v1');
+  const locked = await readFile(join(v1, 'notes.json'), 'utf8');
+  assert.match(locked, /Synthetic feedback/);
+  const snapshot = await readFile(join(v1, 'composition', 'index.html'), 'utf8');
+  assert.match(snapshot, /src="media\/camera-b.mp4"/);
+  assert.match(snapshot, /data-media-start="0\.06666666666666667"/);
+  assert.doesNotMatch(snapshot, /data-review-source|rough cut\.mp4|duration-frame/);
+  assert.equal(await readFile(input, 'utf8'), author);
+  const edit = join(cwd, 'edit-review', 'source', 'index.html');
+  const revision = join(cwd, 'changes.json');
+
+  await writeFile(revision, JSON.stringify({ N1: { note: 'New cut', frame: 11, end_frame: 25 } }));
+  const invalid = invoke('open', edit, '--outcomes', revision, '--no-poll');
+  assert.equal(invalid.status, 1);
+  assert.match(invalid.stderr, /Outcome N1 end_frame.*at most 24 in v2/);
+
+  await writeFile(revision, JSON.stringify({ N1: { note: 'New cut', frame: 11, end_frame: 24 } }));
+  const second = invoke('open', edit, '--note', 'New timing', '--outcomes', revision, '--no-poll');
+  assert.equal(second.status, 0, second.stderr);
+  const receipt = decode(second.stdout);
+  assert.equal(receipt.version, 'v2');
+  assert.equal(receipt.session.url, 'http://127.0.0.1/review');
+  assert.deepEqual(receipt.ingested, []);
+  assert.deepEqual(receipt.clips[1], { clip: 'b', start_frame: 11, end_frame: 24, media_in: 2, media_out: 15 });
+  const v2 = join(cwd, 'edit-review', 'review', 'v2');
+  assert.deepEqual(JSON.parse(await readFile(join(v2, 'version.json'), 'utf8')).resolutions,
+    { N1: { version: 'v2', note: 'New cut', frame: 11, end_frame: 24 } });
+  assert.match(await readFile(join(v1, 'next.js'), 'utf8'), /"end_frame":24/);
+  assert.equal(await readFile(join(v1, 'notes.json'), 'utf8'), locked);
+
+  const third = invoke('open', edit, '--no-poll');
+  assert.equal(third.status, 1);
+  assert.match(third.stderr, /Poll and lock v2/);
+});

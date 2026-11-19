@@ -2,11 +2,14 @@
 // https://github.com/moritzkremb/framejam/blob/bc45364aff90ba931d350e931291940fdc6e604c/src/server/json-store.ts
 // MIT License, Copyright (c) 2026 Moritz Kremb. See third_party/framejam/LICENSE.
 import { constants } from 'node:fs';
-import { copyFile, mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
 import { createRequire } from 'node:module';
 import { parseArgs } from 'node:util';
-import { compositionEdl } from './composition-edl.mjs';
+import { documentEdl } from './composition-edl.mjs';
+import { compositionSources, normalizeComposition, parseComposition } from './composition.mjs';
+import { resolveOutcomes } from './outcomes.mjs';
+import { latestVersion } from './workspace.mjs';
 import { readManifest, writeJson } from './manifest.mjs';
 import { projectState, readNotes } from './notes.mjs';
 
@@ -27,7 +30,7 @@ const gsapPath = require.resolve('gsap/dist/gsap.min.js');
 const runtimePath = join(dirname(require.resolve('hyperframes/package.json')), 'dist', 'hyperframe.runtime.iife.js');
 const gsapBanner = '/*! GSAP 3.15.1 — GreenSock Standard License — https://gsap.com/standard-license/ */\n';
 const runtimeBanner = '/*! HyperFrames 0.9.69 — Apache-2.0 — https://github.com/heygen-com/hyperframes */\n';
-const [composition, gsap, runtime, template, regions, review, bridge, edlCode, transcriptCode, spokenCode, feedbackCode] =
+const [authorHtml, gsap, runtime, template, regions, review, bridge, edlCode, transcriptCode, spokenCode, feedbackCode] =
   await Promise.all([
     values.composition ? readFile(resolve(values.composition), 'utf8') : text('composition/index.html'),
     readFile(gsapPath, 'utf8'), readFile(runtimePath, 'utf8'), text('scripts/review.html'),
@@ -37,7 +40,14 @@ const [composition, gsap, runtime, template, regions, review, bridge, edlCode, t
 
 const dir = resolve(values.media);
 const manifest = await readManifest(dir);
-const edl = compositionEdl(composition, manifest.assets);
+const document = parseComposition(authorHtml);
+const edl = documentEdl(document, manifest.assets);
+for (const [id, original] of compositionSources(document, resolve(values.composition ?? 'composition/index.html'))) {
+  if (original && original !== manifest.assets[id].source) {
+    throw new Error(`Asset ${id} already uses a different original. Give the new original a distinct asset ID.`);
+  }
+}
+const composition = normalizeComposition(authorHtml, document);
 const assets = Object.fromEntries(edl.segments.map(({ asset }) => [asset, manifest.assets[asset]]));
 const transcripts = {};
 for (const [id, asset] of Object.entries(assets)) {
@@ -56,10 +66,7 @@ const lock = join(root, '.build-lock');
 await mkdir(lock);
 let stage;
 try {
-  const existing = (await readdir(root, { withFileTypes: true }))
-    .filter(entry => entry.isDirectory() && /^v[1-9]\d*$/.test(entry.name))
-    .map(entry => Number(entry.name.slice(1)));
-  const latest = Math.max(0, ...existing);
+  const latest = await latestVersion(root);
   // The open command requests a starting number for a fresh review.
   const startsReview = values['initial-version'] && latest === 0;
   if (!startsReview && number !== latest + 1) throw new Error('Build the next version in order; existing versions are immutable');
@@ -67,12 +74,7 @@ try {
   const previous = parent ? await readNotes(join(root, parent)) : null;
   if (parent && !previous) throw new Error(`Poll and lock ${parent}'s feedback before building ${version}`);
   const outcomes = values.outcomes ? JSON.parse(await readFile(resolve(values.outcomes), 'utf8')) : {};
-  if (!outcomes || Array.isArray(outcomes) || typeof outcomes !== 'object' ||
-      Object.entries(outcomes).some(([id, note]) => !previous?.notes.some(n => n.id === id) ||
-        typeof note !== 'string' || !note.trim())) {
-    throw new Error('Outcomes must map previous note IDs to non-empty explanations');
-  }
-  const resolutions = Object.fromEntries(Object.entries(outcomes).map(([id, note]) => [id, { version, note }]));
+  const resolutions = resolveOutcomes(outcomes, previous, version, edl.frame_count);
   const record = { version, parent, note: values.note, resolutions };
   const inline = code => `<script>${code.replace(/<\/script/gi, '<\\/script')}</script>`;
   const classic = code => code.replace(/^import .*;\n/gm, '').replace(/^export /gm, '');

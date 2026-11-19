@@ -1,13 +1,15 @@
 #!/usr/bin/env node
 import { spawn, spawnSync } from 'node:child_process';
 import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
-import { basename, dirname, join } from 'node:path';
+import { basename, dirname, extname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { decode, encode } from '@toon-format/toon';
-import { commands, parseCommand } from './cli-args.mjs';
+import { commands, isCompositionFile, parseCommand } from './cli-args.mjs';
+import { compositionSources, parseComposition, relocateComposition } from './composition.mjs';
 import { readManifest } from './manifest.mjs';
+import { readNotes } from './notes.mjs';
 import { findModel, findWhisper } from './whisper.mjs';
-import { compositionPath, initWorkspace, isFootageStarter, populateStarter, readComposition, samplePath } from './workspace.mjs';
+import { compositionPath, initWorkspace, isFootageStarter, latestVersion, populateStarter, readComposition, samplePath } from './workspace.mjs';
 
 const pkg = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
 const print = data => console.log(encode(data));
@@ -88,7 +90,11 @@ async function build(args, options, file) {
   }
   await script('./build-review.mjs', [...args, ...flags(options)]);
   const review_file = join(root, version, 'review.html');
-  return { version, review_file, next_step: `Run dailies-axi review ${fileArg(review_file)}.` };
+  const { fps, frame_count, segments } = JSON.parse(await readFile(join(root, version, 'edl.json'), 'utf8'));
+  return { version, review_file, fps, frame_count,
+    clips: segments.map(({ clip, start_frame, end_frame, media_in, media_out }) =>
+      ({ clip, start_frame, end_frame, media_in, media_out })),
+    next_step: `Run dailies-axi review ${fileArg(review_file)}.` };
 }
 
 async function review(file, options) {
@@ -147,8 +153,7 @@ async function autoTranscribe(asset, media, options) {
     ...(options.srt ? {} : { language: options.language ?? 'zh' }) };
 }
 
-async function open(video, workspace, options) {
-  if (!(await stat(video)).isFile()) throw new Error(`Not a video file: ${video}`);
+async function createWorkspace(workspace) {
   await mkdir(dirname(workspace), { recursive: true, mode: 0o700 });
   try {
     await mkdir(workspace, { mode: 0o700 });
@@ -158,21 +163,83 @@ async function open(video, workspace, options) {
     }
     throw error;
   }
+}
+
+async function openVideo(video, workspace, options) {
+  if (!(await stat(video)).isFile()) throw new Error(`Not a video file: ${video}`);
+  await createWorkspace(workspace);
 
   await initWorkspace(workspace);
   const file = compositionPath(workspace);
   const media = join(workspace, 'media');
   const { asset, version } = options;
   const { transcript } = await ingest([video, asset], { ...options, media }, file);
-  const { review_file } = await build([version, join(workspace, 'review')], { media, 'initial-version': true }, file);
-  const result = await review(review_file, {});
+  const { next_step, ...built } = await build([version, join(workspace, 'review')], { media, 'initial-version': true }, file);
+  return openReview({ workspace, asset, ...built, transcript }, options);
+}
+
+async function openComposition(input, destination, options) {
+  const parent = dirname(dirname(input));
+  const isWorkingFile = input === compositionPath(parent);
+  const workspace = destination ?? (isWorkingFile ? parent :
+    join(process.cwd(), `${basename(input, extname(input))}-review`));
+  const file = compositionPath(workspace);
+  const original = await readFile(input, 'utf8');
+  const document = parseComposition(original);
+  const sources = compositionSources(document, input);
+  if (options.srt && sources.size !== 1) throw new Error('--srt requires a composition with exactly one asset');
+
+  const media = join(workspace, 'media');
+  const root = join(workspace, 'review');
+  const latest = await latestVersion(root);
+  const version = options.version ?? `v${latest + 1}`;
+  if (latest && version !== `v${latest + 1}`) {
+    throw new Error(`Build the next version in order (v${latest + 1}); existing versions are immutable`);
+  }
+  if (latest && !await readNotes(join(root, `v${latest}`))) {
+    throw new Error(`Poll and lock v${latest}'s feedback before building ${version}`);
+  }
+  const { assets } = await readManifest(media);
+  const missing = [];
+  for (const [id, source] of sources) {
+    const asset = Object.hasOwn(assets, id) ? assets[id] : undefined;
+    if (!asset) {
+      if (!source) throw new Error(`Asset ${id} is missing; set data-review-source or src to its local original`);
+      if (!(await stat(source)).isFile()) throw new Error(`Not a video file: ${source}`);
+      missing.push([id, source]);
+    } else if (source && source !== asset.source) {
+      throw new Error(`Asset ${id} already uses a different original. Give the new original a distinct asset ID.`);
+    }
+  }
+  if (file !== input) {
+    await createWorkspace(workspace);
+    await mkdir(dirname(file));
+    await writeFile(file, relocateComposition(original, document, input), { flag: 'wx' });
+  }
+
+  const ingested = [];
+  for (const [asset, source] of missing) {
+    const { transcript } = await ingest([source, asset], { ...options, media, fps: document.fps }, file);
+    ingested.push({ asset, transcript });
+  }
+  const { next_step, ...built } = await build([version, root], {
+    composition: file, media, ...(latest ? {} : { 'initial-version': true }),
+    ...(options.note === undefined ? {} : { note: options.note }),
+    ...(options.outcomes ? { outcomes: options.outcomes } : {}),
+  }, file);
+  return openReview({ workspace, composition: file, ...built, ingested }, options);
+}
+
+async function openReview(receipt, options) {
+  const { review_file } = receipt;
+  const result = await review(review_file, options['no-open'] ? { 'no-open': true } : {});
   const ended = result.session?.status === 'user-ended';
   if (!ended && !result.session?.url) throw new Error('Lavish did not return a review link.');
   if (!ended) result.next_step = options['no-poll'] ? `Run dailies-axi poll ${fileArg(review_file)} to collect feedback.`
     : 'Waiting for feedback. In Lavish, choose Send feedback to agent.';
 
-  const receipt = encode({ workspace, asset, version, review_file, transcript, ...result });
-  await new Promise((resolve, reject) => process.stdout.write(`${receipt}\n`, error => error ? reject(error) : resolve()));
+  const output = encode({ ...receipt, ...result });
+  await new Promise((resolve, reject) => process.stdout.write(`${output}\n`, error => error ? reject(error) : resolve()));
   if (!ended && !options['no-poll']) return poll(review_file);
 }
 
@@ -216,7 +283,7 @@ async function main() {
 
   const file = compositionPath(process.cwd());
   switch (command) {
-    case 'open': return open(...args, options);
+    case 'open': return (isCompositionFile(args[0]) ? openComposition : openVideo)(...args, options);
     case 'init': {
       const [workspace] = args;
       const created = await initWorkspace(workspace, options.sample);

@@ -37,6 +37,7 @@ function redraw() {
 
 function drawTimeline() {
   const selected = range ?? dragRange;
+  timeline.hidden = !editable() && !edl.segments.length && !selected && !notes.some(note => note.kind === 'range');
   const spans = [
     ...edl.segments.map(segment => [segment.start_frame, segment.end_frame, 'clip-span']),
     ...notes.filter(note => note.kind === 'range').map(note => [note.frame, note.end_frame, 'noted-span']),
@@ -302,7 +303,6 @@ function renderNotes() {
   $('#empty').hidden = notes.length > 0;
   $('#send').disabled = !editable() || !notes.length;
   $('#note-tools').hidden = !editable();
-  timeline.hidden = !editable() && !edl.segments.length && !notes.some(note => note.kind === 'range');
   $('#send').hidden = locked || sent;
   surface.classList.toggle('locked', locked || sent);
   $('#notes').replaceChildren(...sortNotes(notes).map(note => {
@@ -370,14 +370,33 @@ function refreshReview() {
 refreshReview();
 setInterval(refreshReview, 2000);
 
-if (record.parent) {
+function renderHistory() {
+  if (!record.parent) return;
   $('#history').hidden = false;
   $('#version-summary').textContent = record.note || `Follow-up to ${record.parent}`;
   $('#previous-notes').replaceChildren(...config.previousNotes.map(note => {
-    const result = record.resolutions[note.id]?.note ?? 'No outcome recorded';
-    return Object.assign(document.createElement('li'), { textContent: `${note.id} · ${note.text} → ${result}` });
+    const result = record.resolutions[note.id];
+    const row = Object.assign(document.createElement('li'), {
+      textContent: `${note.id} · ${note.text} → ${result?.note ?? 'No outcome recorded'}`,
+    });
+    if (result?.frame === undefined) return row;
+    const { frame: start, end_frame: end } = result;
+    const button = Object.assign(document.createElement('button'), {
+      type: 'button', disabled: !ready,
+      textContent: end === undefined ? `Jump to F${start}` : `Jump to F${start}–F${end} (end excluded)`,
+    });
+    button.onclick = () => {
+      if (!ready || gesture) return;
+      range = end === undefined ? null : { start, end };
+      navigate(start);
+      drawTimeline();
+      canvas.scrollIntoView({ block: 'start' });
+    };
+    row.append(' ', button);
+    return row;
   }));
 }
+renderHistory();
 
 $('#send').onclick = async () => {
   if (!editable() || !notes.length) return;
@@ -452,6 +471,7 @@ iframe.addEventListener('load', () => {
     seekFrame(0);
     renderTranscript();
     renderNotes();
+    renderHistory();
     status(locked ? 'Feedback locked. This round is read-only.' : 'Ready. Select a region, drag a range, or add a whole-video note.');
   };
   iframe.contentWindow.postMessage('frame-review:connect', '*', [channel.port2]);

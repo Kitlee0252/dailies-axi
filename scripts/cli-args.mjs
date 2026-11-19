@@ -4,14 +4,16 @@ import { parseArgs } from 'node:util';
 const version = /^v[1-9]\d*$/;
 const asset = /^[a-zA-Z0-9][\w-]*$/;
 const frame = /^\d+$/;
+export const isCompositionFile = file => /^\.html?$/i.test(extname(file));
 const optionTypes = { string: { type: 'string' }, boolean: { type: 'boolean' }, path: { type: 'string' } };
 
 export const commands = {
   open: {
-    usage: 'open <video> [workspace-dir] [--asset ID] [--version vN] [--language CODE | --srt FILE | --no-transcribe] [--no-poll]',
-    description: 'Create a new private <video-name>-review workspace, ingest as cut, transcribe when local Whisper is available, open v1 in Lavish and wait for feedback. Use --no-poll to exit after opening.',
+    usage: 'open <video|composition.html> [workspace-dir] [--asset ID] [--version vN] [--note SUMMARY] [--outcomes FILE] [--language CODE | --srt FILE | --no-transcribe] [--no-poll] [--no-open]',
+    description: 'Ingest a video or the missing originals in a HyperFrames composition, build the review, open it in Lavish and wait for feedback. Open the workspace’s source/index.html for the next round. Use --no-poll to exit after opening.',
     positionals: [{ path: true }, { path: true, optional: true }],
-    flags: { asset: 'string', version: 'string', language: 'string', srt: 'path', 'no-transcribe': 'boolean', 'no-poll': 'boolean' },
+    flags: { asset: 'string', version: 'string', note: 'string', outcomes: 'path', language: 'string', srt: 'path',
+      'no-transcribe': 'boolean', 'no-poll': 'boolean', 'no-open': 'boolean' },
   },
   init: {
     usage: 'init [directory] [--sample]',
@@ -99,12 +101,20 @@ export function parseCommand([command, ...argv], cwd = process.cwd()) {
     throw new Error(`--no-transcribe cannot be combined with --srt or --language\n${usage}`);
   }
   if (command === 'open') {
-    const [video] = args;
-    args[1] ??= resolve(cwd, `${basename(video, extname(video))}-review`);
-    flags.asset ??= 'cut';
-    flags.version ??= 'v1';
-    if (!asset.test(flags.asset)) throw new Error(`Invalid asset ID: ${flags.asset}\n${usage}`);
-    if (!version.test(flags.version) || !Number.isSafeInteger(Number(flags.version.slice(1)))) {
+    const [file] = args;
+    if (isCompositionFile(file)) {
+      if (flags.asset !== undefined) throw new Error(`--asset only applies to opening a video.\n${usage}`);
+    } else {
+      if (flags.note !== undefined || flags.outcomes !== undefined) {
+        throw new Error(`--note and --outcomes only apply to opening a composition.\n${usage}`);
+      }
+      args[1] ??= resolve(cwd, `${basename(file, extname(file))}-review`);
+      flags.asset ??= 'cut';
+      flags.version ??= 'v1';
+      if (!asset.test(flags.asset)) throw new Error(`Invalid asset ID: ${flags.asset}\n${usage}`);
+    }
+    if (flags.version !== undefined &&
+        (!version.test(flags.version) || !Number.isSafeInteger(Number(flags.version.slice(1))))) {
       throw new Error(`Invalid starting version: ${flags.version}\n${usage}`);
     }
   }

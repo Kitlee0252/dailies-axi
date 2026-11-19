@@ -137,3 +137,33 @@ test('note quotes follow the edit and leave out speech this version cut', async 
   const trimmed = { ...edl, segments: [{ ...edl.segments[0], source_in_seconds: 1.6 }] };
   assert.equal(withSpoken({ kind: 'range', frame: 0, end_frame: 3 }, [], transcripts, trimmed).spoken, '前句。');
 });
+
+test('frame timing normalizes rounded seconds, reports the nearest frame and detects conflicting forms', async () => {
+  const { normalizeComposition, parseComposition } = await import('./composition.mjs');
+  const html = start => `<!doctype html><body><main data-composition-id="test" data-fps="30" data-duration-frame="200">
+    <div id="overlay" ${start}></div></main></body>`;
+  const normalize = start => {
+    const source = html(start);
+    return normalizeComposition(source, parseComposition(source));
+  };
+  assert.match(normalize('data-start-frame="188" data-start="6.266666667"'), /data-start="6\.266666666666667"/);
+  assert.throws(() => normalize('data-start="6.26"'), /#overlay data-start.*nearest is F188/);
+  assert.throws(() => normalize('data-start="6.266666667" data-start-frame="187"'), /F188 vs F187/);
+  assert.throws(() => normalize('data-start-frame="188.5"'), /non-negative integer/);
+});
+
+test('outcomes keep plain text and validate point and range targets in the new version', async () => {
+  const { resolveOutcomes } = await import('./outcomes.mjs');
+  const previous = { notes: ['N1', 'N2', 'N3'].map(id => ({ id })) };
+  const resolve = outcomes => resolveOutcomes(outcomes, previous, 'v2', 10);
+  assert.deepEqual(resolve({ N1: 'Trimmed', N2: { note: 'Title', frame: 0 }, N3: { note: 'Fade', frame: 8, end_frame: 10 } }), {
+    N1: { version: 'v2', note: 'Trimmed' },
+    N2: { version: 'v2', note: 'Title', frame: 0 },
+    N3: { version: 'v2', note: 'Fade', frame: 8, end_frame: 10 },
+  });
+  assert.throws(() => resolve({ N4: 'Typo' }), /unknown previous note ID/);
+  for (const details of [{ frame: 10 }, { frame: -1 }, { frame: 1.5 }, { end_frame: 1 }]) {
+    assert.throws(() => resolve({ N1: { note: 'Edit', ...details } }), /frame must be an integer/);
+  }
+  assert.throws(() => resolve({ N1: { note: 'Edit', frame: 8, end_frame: 8 } }), /end_frame must be an integer greater/);
+});

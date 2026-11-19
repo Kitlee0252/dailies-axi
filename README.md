@@ -55,6 +55,31 @@ dailies-axi transcribe camera --srt source/corrected.srt
 
 Automatic transcription uses local `whisper-cli` or `whisper-cpp` and defaults to Mandarin. Chinese and Japanese are timed per character or token, so transcript lines split at sentence punctuation and range quotes cover only the words inside the range. Whisper's word times can be off by a few tenths of a second, so check cut points against the picture and sound. Set `DAILIES_WHISPER` and `DAILIES_WHISPER_MODEL` to select the executable and a multilingual GGML model. You can also place the model under `~/.cache/hyperframes/whisper/models`. Dailies AXI never downloads a model. Corrected subtitles use original source times and take precedence over the automatic draft. Each build snapshots its transcripts.
 
+## HyperFrames composition quick start
+
+```sh
+dailies-axi open /path/to/edit.html
+```
+
+For each video segment, give the element a unique HTML `id` and set `data-review-clip` to its asset ID. Point `src` at a local original, or use `src="media/<asset-id>.mp4"` with `data-review-source` pointing at the original. Original paths are relative to the authoring HTML or absolute. Segments that reuse an asset ID share its original. Give replacement footage a new asset ID. For an already ingested asset, `src="media/<asset-id>.mp4"` is sufficient.
+
+```html
+<main data-composition-id="edit" data-width="1920" data-height="1080"
+      data-fps="30" data-start-frame="0" data-duration-frame="248">
+  <video id="take-1" class="clip" data-review-clip="camera-a"
+         src="originals/take-a.mov" data-track-index="0" data-has-audio="true"
+         data-start-frame="0" data-duration-frame="188"></video>
+  <video id="take-2" class="clip" data-review-clip="camera-b"
+         src="media/camera-b.mp4" data-review-source="originals/take-b.mov"
+         data-track-index="0" muted
+         data-start-frame="188" data-media-start-frame="12" data-duration-frame="60"></video>
+</main>
+```
+
+Include the normal HyperFrames styles and scripts in your composition. Starting from a standalone HTML file, `open` copies it to `<file-stem>-review/source/index.html`. Use that working copy for later rounds. If you open a workspace’s `source/index.html`, the command uses that workspace directly. It ingests missing originals at the composition’s frame rate, builds the next version, prints the link, and waits for feedback. It reuses existing assets and requires the previous round to be locked. Use `--no-poll` to stop after getting the link. Transcription options apply to newly ingested assets. For a composition with one asset, you can also pass `--srt FILE`.
+
+Use zero-based integer `data-start-frame`, `data-duration-frame`, and `data-media-start-frame` for start, length, and proxy offset. Their seconds counterparts `data-start`, `data-duration`, and `data-media-start` still work. If you provide both forms, they must identify the same frame. The build rejects off-grid seconds and reports the nearest frame. It writes exact timing and proxy references into the snapshot for HyperFrames and leaves the working HTML as authored. The receipt reports the composition frame count and each clip’s frame bounds and proxy offsets. `edl.json` also records the corresponding original source frames.
+
 ## Animation quick start
 
 ```sh
@@ -79,15 +104,25 @@ This opens the 24-second Night Signal composition in Lavish. Keep the poll attac
    dailies-axi frame review/v1/media/camera.mp4 90 renders/check.jpg
    ```
 
-5. Edit the working composition and build the next version after polling the preceding batch. Keep the same review output directory. Optionally supply an outcomes JSON object such as `{"N1":"Trimmed the pause by 12 frames"}`.
+5. Edit the working composition and open the next version after polling the preceding batch. From the workspace, run
 
    ```sh
-   dailies-axi build v2 --note "Shortened the pause" --outcomes notes/v2-outcomes.json
-   dailies-axi review v2
-   dailies-axi poll v2
+   dailies-axi open source/index.html --note "Shortened the pause" --outcomes notes/v2-outcomes.json
    ```
 
-   Omit `--outcomes` if there’s no outcomes file. The new `version.json` records its parent, summary and outcomes. The first `review` of a new version posts its link and summary in the previous version’s Lavish conversation, where each note also shows its outcome. Lavish’s `end` command can close the previous session. If the reviewer chose **Send & End**, stop polling that session after reading its final receipt.
+   The optional outcomes JSON maps each previous note ID to an explanation. Use a string for text only, `{ "note": "...", "frame": 188 }` for a single frame, or add `"end_frame"` for a range.
+
+   ```json
+   {
+     "N1": "Removed the duplicate shot",
+     "N2": { "note": "Moved the title to the cut", "frame": 188 },
+     "N3": { "note": "Shortened the fade", "frame": 220, "end_frame": 248 }
+   }
+   ```
+
+   Frame numbers refer to the **new version’s timeline**. They are zero-based, and `end_frame` is exclusive. In the new review’s previous-round list, clicking a frame jumps to it and clicking a range also highlights that span. The new `version.json` records its parent, summary and outcomes. Opening the new version posts its link and summary in the previous version’s Lavish conversation. Lavish’s `end` command can close the previous session. If the reviewer chose **Send & End**, stop polling that session after reading its final receipt.
+
+   For separate steps or a custom review output directory, use `build v2 --note ... --outcomes FILE`, then `review` and `poll`. Keep that same output directory across rounds.
 
 `build` defaults to `source/index.html` and writes to `review/vN/`. If no working composition exists, it uses the bundled animation. Use `--composition FILE` for another edit. If you use a custom media directory, pass the same `--media DIR` to ingest, transcribe, and build. If you pass a custom output directory to `build`, give `review` and `poll` its explicit `review.html` path. Paths resolve from the current directory. The runtime, GSAP and review page assets come from the installation.
 
