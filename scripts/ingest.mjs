@@ -5,6 +5,9 @@ import { parseArgs, promisify } from 'node:util';
 import { frameRate, mapFrames, readManifest, sha256, writeJson } from './manifest.mjs';
 
 const run = promisify(execFile);
+// FFmpeg scene scores run from 0 to 1. Hard cuts between similar flat shots can
+// score near 0.2, while camera motion usually stays under 0.1.
+const SCENE_THRESHOLD = 0.15;
 const probe = async (file, args) => JSON.parse((await run('ffprobe',
   ['-v', 'error', ...args, '-of', 'json', file], { maxBuffer: 64 * 1024 * 1024 })).stdout);
 const { positionals: [file, id, extra], values } = parseArgs({
@@ -59,6 +62,13 @@ try {
     throw new Error('Could not verify the proxy rate and frame count');
   }
   const proxyToSource = mapFrames(sourcePts, timeBase, fps, count);
+  // Hard cuts in the proxy let reviewers and agents work shot by shot. A
+  // rendered rough cut carries no edit list, so detect them from the picture.
+  const { stdout: scenes } = await run('ffmpeg', ['-v', 'error', '-i', output, '-an', '-vf',
+    `scale=160:-2,select='gt(scene,${SCENE_THRESHOLD})',metadata=print:file=-`, '-f', 'null', '-'],
+    { maxBuffer: 64 * 1024 * 1024 });
+  const sceneCuts = [...new Set([...scenes.matchAll(/pts_time:(\d+(?:\.\d+)?)/g)]
+    .map(match => Math.round(Number(match[1]) * fps)))].filter(frame => frame > 0 && frame < count);
   const name = `${id}.mp4`;
   if (await sha256(source) !== digest) throw new Error('Source changed during ingest');
   manifest.assets[id] = {
@@ -70,13 +80,14 @@ try {
     audio: Boolean(audio), audio_offset: srcStart,
     proxy: `media/${name}`, proxy_fps: fps, width: proxy.width, height: proxy.height, frame_count: count,
     conform: Math.abs(nominal - fps) > 1e-7 ? 'resampled on the original time axis' : null,
-    dropped_frames: dropped, proxy_to_source: proxyToSource,
+    dropped_frames: dropped, scene_cuts: sceneCuts, proxy_to_source: proxyToSource,
     repeated_frames: proxyToSource.flatMap((value, frame) => value === proxyToSource[frame - 1] ? [frame] : []),
   };
   await rename(output, join(dir, name));
   await writeJson(join(dir, 'manifest.json'), manifest);
   console.log(JSON.stringify({ asset: id, fps, frames: count, duration: count / fps,
-    width: proxy.width, height: proxy.height, audio: Boolean(audio), repeated_frames: manifest.assets[id].repeated_frames }));
+    width: proxy.width, height: proxy.height, audio: Boolean(audio), shots: sceneCuts.length + 1,
+    repeated_frames: manifest.assets[id].repeated_frames }));
 } finally {
   if (temp) await rm(temp, { recursive: true, force: true });
   await rm(lock, { recursive: true });

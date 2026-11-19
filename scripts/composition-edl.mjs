@@ -46,14 +46,20 @@ export function compositionEdl(html, assets) {
     }
     return { clip: id, asset: assetId, start_frame: start, end_frame: start + duration, media_in: media };
   }).sort((a, b) => a.start_frame - b.start_frame);
-  const edl = { schema_version: 1, fps, frame_count: frameCount, segments };
+  const cuts = new Set();
   for (const segment of segments) {
     const [span] = mapInterval({ segments: [segment] }, assets, segment.start_frame, segment.end_frame);
     segment.media_out = span.media_end_frame;
+    if (segment.start_frame > 0) cuts.add(segment.start_frame);
+    if (segment.end_frame < frameCount) cuts.add(segment.end_frame);
+    for (const cut of assets[segment.asset].scene_cuts ?? []) {
+      if (cut > segment.media_in && cut < segment.media_out) cuts.add(segment.start_frame + cut - segment.media_in);
+    }
     segment.source_in = span.source_frame;
     segment.source_out = span.last_source_frame + 1;
     segment.source_in_seconds = span.source_seconds;
     segment.source_out_seconds = span.source_end_seconds;
   }
-  return edl;
+  // Composition frames where a new shot starts: segment edges and cuts detected in the footage.
+  return { schema_version: 1, fps, frame_count: frameCount, cuts: [...cuts].sort((a, b) => a - b), segments };
 }

@@ -28,6 +28,7 @@
     .clip-span { background: #685b85; border-right: 1px solid #211d30 }
     .noted-span { background: #8cb4bf }
     .selected-span { background: #b8f3d8 }
+    #timeline .cut-mark { top: -3px; bottom: -3px; width: 2px; margin-left: -1px; background: #ffda72 }
     #note-tools { margin: 10px 0 14px }
     #note-tools .row { margin-top: 8px }
     #note-tools input { width: 6em }
@@ -56,7 +57,7 @@
 <main>
   <div class="eyebrow">Frame review / <span id="version"></span></div>
   <h1>Point to what should change</h1>
-  <p>Draw a region on the frame or drag on the timeline to select a range.</p>
+  <p>Draw a region on the frame or drag on the timeline to select a range. Yellow ticks mark shot cuts, and dragged ranges snap to them.</p>
   <div id="stage">
     <div id="canvas">
       <iframe id="composition" title="Live HyperFrames composition" sandbox="allow-scripts" tabindex="-1"></iframe>

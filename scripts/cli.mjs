@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { spawn, spawnSync } from 'node:child_process';
-import { mkdir, readFile, rm, stat } from 'node:fs/promises';
+import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { decode, encode } from '@toon-format/toon';
@@ -52,17 +52,18 @@ async function withStarterLock(file, operation) {
 }
 
 async function ingest(args, options, file) {
+  const { fps, media = join(process.cwd(), 'media') } = options;
   const execute = async () => {
-    const result = JSON.parse(await script('./ingest.mjs', [...args, ...flags(options)]));
+    const result = JSON.parse(await script('./ingest.mjs', [...args, ...flags({ media, ...(fps ? { fps } : {}) })]));
     const updated = await populateStarter(file, result);
     const mediaFlag = options.media ? ` --media ${fileArg(options.media)}` : '';
-    return { ...result, media: options.media ?? join(process.cwd(), 'media'),
-      ...(updated ? { composition: file } : {}),
-      next_step: updated ? `Optionally transcribe the asset, then run dailies-axi build v1${mediaFlag}.`
+    return { ...result, media, ...(updated ? { composition: file } : {}),
+      next_step: updated ? `Run dailies-axi build v1${mediaFlag}.`
         : 'Add the asset to the composition if needed, then build the next review version.' };
   };
-  if (await isFootageStarter(await readComposition(file))) return withStarterLock(file, execute);
-  return execute();
+  const result = await isFootageStarter(await readComposition(file)) ? await withStarterLock(file, execute) : await execute();
+  const { next_step, ...rest } = result;
+  return { ...rest, transcript: await autoTranscribe(result.asset, media, options), next_step };
 }
 
 async function build(args, options, file) {
@@ -97,11 +98,53 @@ async function review(file, options) {
     result.next_step = result.next_step.replace(`lavish-axi poll ${result.session.file}`, () =>
       `dailies-axi poll ${fileArg(file)}`);
   }
-  return result;
+  const announced = result.session?.url && await announce(file, result.session.url);
+  return announced ? { ...result, announced } : result;
+}
+
+// The reviewer is still looking at the previous round, so post the new link
+// there once. Lavish refuses when the reviewer ended that session.
+async function announce(file, url) {
+  const { version, parent, note } = JSON.parse(await readFile(join(dirname(file), 'version.json'), 'utf8'));
+  const marker = join(dirname(file), '.announced');
+  if (!parent || await stat(marker).then(() => true, () => false)) return;
+  const previous = join(dirname(dirname(file)), parent, 'review.html');
+  const message = `${version} is ready for review: ${url}${note ? `\n\n${note}` : ''}`;
+  const reply = spawnSync('lavish-axi', ['reply', previous, '--agent-reply', message], { encoding: 'utf8', timeout: 20000 });
+  if (reply.status !== 0) {
+    return `Could not post the ${version} link in the ${parent} review. Give the reviewer the session URL.`;
+  }
+  await writeFile(marker, url);
+  return `Posted the ${version} link in the ${parent} review.`;
 }
 
 function poll(file, options = {}) {
   return script('./poll-review.mjs', [file, ...flags(options)], false);
+}
+
+// A transcript lets the reviewer anchor notes to speech, so ingest makes one when it can.
+// Missing tools or a failed run never block the ingest or the review link.
+async function autoTranscribe(asset, media, options) {
+  if (options['no-transcribe']) return { status: 'skipped' };
+  if (!options.srt) {
+    const { assets } = await readManifest(media);
+    if (!assets[asset]?.audio) return { status: 'no audio' };
+    const model = findModel(media);
+    if (!findWhisper() || !model || /\.en[.-]/.test(basename(model))) {
+      return { status: 'unavailable', action: 'Install whisper.cpp with a multilingual model, or pass --srt FILE. Run dailies-axi doctor.' };
+    }
+  }
+  const args = [asset, `--media=${media}`, ...(options.srt ? [`--srt=${options.srt}`] : []),
+    ...(options.language ? [`--language=${options.language}`] : [])];
+  try {
+    await script('./transcribe.mjs', args);
+  } catch {
+    process.exitCode = undefined;
+    return { status: 'failed', action: 'See the transcription error above. The review opened without speech; run dailies-axi transcribe, then build the next version.' };
+  }
+  const { words } = JSON.parse(await readFile(join(media, `${asset}.transcript.json`), 'utf8'));
+  return { status: words.length ? 'ready' : 'no speech', source: options.srt ? 'srt' : 'whisper',
+    ...(options.srt ? {} : { language: options.language ?? 'zh' }) };
 }
 
 async function open(video, workspace, options) {
@@ -120,7 +163,7 @@ async function open(video, workspace, options) {
   const file = compositionPath(workspace);
   const media = join(workspace, 'media');
   const { asset, version } = options;
-  await ingest([video, asset], { media }, file);
+  const { transcript } = await ingest([video, asset], { ...options, media }, file);
   const { review_file } = await build([version, join(workspace, 'review')], { media, 'initial-version': true }, file);
   const result = await review(review_file, {});
   const ended = result.session?.status === 'user-ended';
@@ -128,7 +171,7 @@ async function open(video, workspace, options) {
   if (!ended) result.next_step = options['no-poll'] ? `Run dailies-axi poll ${fileArg(review_file)} to collect feedback.`
     : 'Waiting for feedback. In Lavish, choose Send feedback to agent.';
 
-  const receipt = encode({ workspace, asset, version, review_file, ...result });
+  const receipt = encode({ workspace, asset, version, review_file, transcript, ...result });
   await new Promise((resolve, reject) => process.stdout.write(`${receipt}\n`, error => error ? reject(error) : resolve()));
   if (!ended && !options['no-poll']) return poll(review_file);
 }

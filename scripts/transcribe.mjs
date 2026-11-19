@@ -1,7 +1,7 @@
 // Adapted from framejam src/server/transcribe.ts (tool/model lookup and invocation).
 // https://github.com/moritzkremb/framejam/blob/bc45364aff90ba931d350e931291940fdc6e604c/src/server/transcribe.ts
 // MIT License, Copyright (c) 2026 Moritz Kremb. See third_party/framejam/LICENSE.
-// Changes: source-time cache, corrected SRT, Mandarin default, local tools only.
+// Changes: source-time cache, corrected SRT, Mandarin default, token timing for unspaced scripts, local tools only.
 import { execFile } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises';
 import os from 'node:os';
@@ -60,7 +60,10 @@ try {
         '-ac', '1', '-ar', '16000', '-c:a', 'pcm_s16le', wav]);
       const threads = String(Math.max(1, Math.min(8, os.cpus().length - 1)));
       const out = path.join(tmp, 'words');
-      await exec(whisper, ['-m', model, '-f', wav, '-ml', '1', '-sow', '-oj', '-of', out,
+      // Chinese and Japanese have no spaces, so splitting on words would time whole
+      // sentences. Token timings keep transcript cues and quotes close to the speech.
+      const split = /^(zh|ja|yue)$/.test(language) ? [] : ['-sow'];
+      await exec(whisper, ['-m', model, '-f', wav, '-ml', '1', ...split, '-oj', '-of', out,
         '-t', threads, '-pp', '-np', '-l', language]);
       try {
         transcript = parseTranscript(await readFile(`${out}.json`, 'utf8'), 'words.json');

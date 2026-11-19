@@ -1,7 +1,7 @@
 // Adapted from framejam src/core/feedback.ts (formatTime, commentAt, describePosition, feedbackPrompt).
 // https://github.com/moritzkremb/framejam/blob/bc45364aff90ba931d350e931291940fdc6e604c/src/core/feedback.ts
 // MIT License, Copyright (c) 2026 Moritz Kremb. See third_party/framejam/LICENSE.
-// Changes: live frame/range labels, rectangle centers, Lavish delivery and source-frame data.
+// Changes: live frame/range labels, rectangle centers, shot spans, Lavish delivery and source-frame data.
 
 export function formatTime(seconds) {
   const s = Math.max(0, seconds);
@@ -33,6 +33,8 @@ export function feedbackPrompt(version, comments) {
   for (const [i, c] of sortNotes(comments).entries()) {
     lines.push(`${i + 1}. **[${commentAt(c)}]** ${c.text}`);
     if (c.rect) lines.push(`  - Region centered at ${describePosition(c.rect.x + c.rect.width / 2, c.rect.y + c.rect.height / 2)}`);
+    if (c.shots?.length) lines.push(`  - ${c.shots.length === 1 ? 'Shot' : 'Shots'} cut to cut: ${
+      c.shots.map(shot => `F${shot.start_frame}–F${shot.end_frame}`).join(', ')} (end excluded)`);
     if (c.spoken) lines.push(`  - Spoken in this range: “${c.spoken}”`);
     if (c.spoken_around) lines.push(`  - Spoken around then: “${c.spoken_around}”`);
     lines.push(`  - Comment id: \`${c.id}\``);

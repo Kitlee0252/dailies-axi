@@ -1,7 +1,7 @@
 // Copied from framejam src/core/transcript.ts
 // https://github.com/moritzkremb/framejam/blob/bc45364aff90ba931d350e931291940fdc6e604c/src/core/transcript.ts
 // MIT License, Copyright (c) 2026 Moritz Kremb. See third_party/framejam/LICENSE.
-// Changes: removed TypeScript types.
+// Changes: removed TypeScript types; words join without spaces in Chinese and Japanese.
 
 export const TRANSCRIPT_FORMATS = "an .srt or .vtt file, or JSON word timings (Whisper, whisper.cpp, Deepgram, ElevenLabs, or [{ text, start, end }] in seconds)";
 
@@ -220,6 +220,16 @@ export function paragraphStarts(words) {
   return starts;
 }
 
+// Dailies AXI addition: Chinese and Japanese timings arrive per character or
+// token, so only words from spaced scripts get a separating space.
+const UNSPACED_END = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\u3000-\u303f\uff00-\uffef]$/u;
+const UNSPACED_START = /^[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\u3000-\u303f\uff00-\uffef,.!?;:]/u;
+
+export function joinWords(words) {
+  return words.reduce((text, word) =>
+    !text ? word : text + (UNSPACED_END.test(text) || UNSPACED_START.test(word) ? '' : ' ') + word, '');
+}
+
 /** The words spoken between two times (any overlap counts), joined as text. */
 /** Longer quotes keep their first and last half, so long ranges don't flood the feedback. */
 const MAX_QUOTE_WORDS = 30;
@@ -228,7 +238,9 @@ export function wordsBetween(t, start, end) {
   if (!t) return undefined;
   const words = t.words.filter((w) => w.end > start && w.start < end).map((w) => w.text);
   if (!words.length) return undefined;
-  if (words.length <= MAX_QUOTE_WORDS) return words.join(" ");
-  const half = MAX_QUOTE_WORDS / 2;
-  return `${words.slice(0, half).join(" ")} … ${words.slice(-half).join(" ")}`;
+  // Character-timed scripts need more tokens for a comparable quote.
+  const max = words.filter((w) => UNSPACED_END.test(w)).length * 2 > words.length ? MAX_QUOTE_WORDS * 3 : MAX_QUOTE_WORDS;
+  if (words.length <= max) return joinWords(words);
+  const half = max / 2;
+  return `${joinWords(words.slice(0, half))} … ${joinWords(words.slice(-half))}`;
 }

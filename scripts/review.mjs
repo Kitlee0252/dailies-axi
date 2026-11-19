@@ -1,7 +1,8 @@
 import { pickRect, frameAt } from './regions.mjs';
-import { mapInterval } from './edl.mjs';
+import { mapInterval, shotSpans, snapToCut } from './edl.mjs';
 import { commentAt, feedbackPrompt, sortNotes } from './feedback-format.mjs';
 import { transcriptCues, withSpoken } from './spoken.mjs';
+import { joinWords } from './transcript.mjs';
 
 const $ = selector => document.querySelector(selector);
 const iframe = $('#composition'), canvas = $('#canvas'), surface = $('#surface');
@@ -40,11 +41,12 @@ function drawTimeline() {
     ...edl.segments.map(segment => [segment.start_frame, segment.end_frame, 'clip-span']),
     ...notes.filter(note => note.kind === 'range').map(note => [note.frame, note.end_frame, 'noted-span']),
     ...(selected ? [[selected.start, selected.end, 'selected-span']] : []),
+    ...(edl.cuts ?? []).map(cut => [cut, cut, 'cut-mark']),
   ];
   timeline.replaceChildren(...spans.map(([start, end, className]) => {
     const span = Object.assign(document.createElement('span'), { className });
     span.style.left = `${start / frameCount * 100}%`;
-    span.style.width = `${(end - start) / frameCount * 100}%`;
+    if (end > start) span.style.width = `${(end - start) / frameCount * 100}%`;
     return span;
   }));
   updateRangeFields();
@@ -177,8 +179,14 @@ timeline.onpointerdown = event => {
 timeline.onpointermove = event => {
   if (dragRange?.id !== event.pointerId) return;
   const index = timelineFrame(event);
-  dragRange.start = Math.min(index, dragRange.origin);
-  dragRange.end = Math.max(index, dragRange.origin) + 1;
+  let start = Math.min(index, dragRange.origin), end = Math.max(index, dragRange.origin) + 1;
+  // A dragged range snaps each edge to a shot cut within a fifth of a second.
+  if (end - start > 2) {
+    const tolerance = Math.max(2, Math.round(fps / 5));
+    start = snapToCut(edl, start, tolerance);
+    end = Math.max(start + 1, snapToCut(edl, end, tolerance));
+  }
+  Object.assign(dragRange, { start, end });
   drawTimeline();
 };
 timeline.onpointerup = event => {
@@ -186,6 +194,7 @@ timeline.onpointerup = event => {
   timeline.onpointermove(event);
   range = { start: dragRange.start, end: dragRange.end };
   dragRange = null;
+  if (range.start !== frame) seekFrame(range.start);
   drawTimeline();
 };
 timeline.onpointercancel = () => { dragRange = null; drawTimeline(); };
@@ -230,7 +239,9 @@ composer.onsubmit = event => {
   const text = input.value.trim();
   if (!editable() || !draft || composer.querySelector('[type=submit]').disabled || !text) return;
   const spans = mapInterval(edl, assets, draft.frame, draft.end_frame ?? draft.frame + 1);
-  const note = withSpoken({ ...draft, id: `N${++noteCount}`, text }, spans, transcripts);
+  const shots = draft.whole_video || !edl.segments.length ? {}
+    : { shots: shotSpans(edl, draft.frame, draft.end_frame ?? draft.frame + 1) };
+  const note = withSpoken({ ...draft, id: `N${++noteCount}`, text, ...shots }, spans, transcripts, edl);
   notes.push(note);
   range = null;
   closeComposer();
@@ -253,19 +264,23 @@ function renderTranscript() {
     const asset = assets[segment.asset];
     const startSeconds = segment.source_in_seconds, endSeconds = segment.source_out_seconds;
     return transcriptCues(transcripts[segment.asset]).flatMap(cue => {
-      if (cue.end <= startSeconds || cue.start >= endSeconds) return [];
-      const boundary = mediaBoundary(asset, segment.media_in, segment.media_out, cue.start, true);
+      // Show only words this segment plays, so trimmed speech disappears from later versions.
+      // Any overlap counts because Whisper's word times can be a few tenths of a second off.
+      const words = cue.words.filter(word => word.end > startSeconds && word.start < endSeconds);
+      if (!words.some(word => /[\p{L}\p{N}]/u.test(word.text))) return [];
+      const cueStart = words[0].start, cueEnd = Math.max(...words.map(word => word.end));
+      const boundary = mediaBoundary(asset, segment.media_in, segment.media_out, cueStart, true);
       let start = Math.max(segment.media_in, boundary - 1);
       // Repeats can share the cue's exact start PTS.
-      if (asset.source_pts[asset.proxy_to_source[start]] === cue.start) {
-        start = mediaBoundary(asset, segment.media_in, boundary, cue.start, false);
+      if (asset.source_pts[asset.proxy_to_source[start]] === cueStart) {
+        start = mediaBoundary(asset, segment.media_in, boundary, cueStart, false);
       }
-      const end = mediaBoundary(asset, start + 1, segment.media_out, cue.end, false);
+      const end = mediaBoundary(asset, start + 1, segment.media_out, cueEnd, false);
       const first = segment.start_frame + start - segment.media_in;
       const last = segment.start_frame + end - segment.media_in;
       const item = document.createElement('span');
       const button = Object.assign(document.createElement('button'), {
-        textContent: cue.words.map(word => word.text).join(' '), title: `Jump to F${first}. Shift-click to select these words.`,
+        textContent: joinWords(words.map(word => word.text)), title: `Jump to F${first}. Shift-click to select these words.`,
       });
       button.onclick = event => {
         navigate(first);

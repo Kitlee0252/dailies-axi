@@ -8,10 +8,10 @@ const optionTypes = { string: { type: 'string' }, boolean: { type: 'boolean' }, 
 
 export const commands = {
   open: {
-    usage: 'open <video> [workspace-dir] [--asset ID] [--version vN] [--no-poll]',
-    description: 'Create a new private <video-name>-review workspace, ingest as cut, open v1 in Lavish and wait for feedback. Use --no-poll to exit after opening.',
+    usage: 'open <video> [workspace-dir] [--asset ID] [--version vN] [--language CODE | --srt FILE | --no-transcribe] [--no-poll]',
+    description: 'Create a new private <video-name>-review workspace, ingest as cut, transcribe when local Whisper is available, open v1 in Lavish and wait for feedback. Use --no-poll to exit after opening.',
     positionals: [{ path: true }, { path: true, optional: true }],
-    flags: { asset: 'string', version: 'string', 'no-poll': 'boolean' },
+    flags: { asset: 'string', version: 'string', language: 'string', srt: 'path', 'no-transcribe': 'boolean', 'no-poll': 'boolean' },
   },
   init: {
     usage: 'init [directory] [--sample]',
@@ -20,10 +20,10 @@ export const commands = {
     flags: { sample: 'boolean' },
   },
   ingest: {
-    usage: 'ingest <source-file> <asset-id> [--fps RATE] [--media DIR]',
-    description: 'Make a local proxy and fill an untouched footage starter with its dimensions, rate and duration.',
+    usage: 'ingest <source-file> <asset-id> [--fps RATE] [--media DIR] [--language CODE | --srt FILE | --no-transcribe]',
+    description: 'Make a local proxy, detect shot cuts, transcribe when local Whisper is available, and fill an untouched footage starter with its dimensions, rate and duration.',
     positionals: [{ path: true }, { pattern: asset }],
-    flags: { fps: 'string', media: 'path' },
+    flags: { fps: 'string', media: 'path', language: 'string', srt: 'path', 'no-transcribe': 'boolean' },
   },
   transcribe: {
     usage: 'transcribe <asset-id> [--srt FILE] [--language CODE] [--media DIR]',
@@ -95,6 +95,9 @@ export function parseCommand([command, ...argv], cwd = process.cwd()) {
     if (!value) throw new Error(`--${name} requires a path.\n${usage}`);
     return [name, resolve(cwd, value)];
   }));
+  if (flags['no-transcribe'] && (flags.srt || flags.language)) {
+    throw new Error(`--no-transcribe cannot be combined with --srt or --language\n${usage}`);
+  }
   if (command === 'open') {
     const [video] = args;
     args[1] ??= resolve(cwd, `${basename(video, extname(video))}-review`);

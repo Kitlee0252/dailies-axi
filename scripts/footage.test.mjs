@@ -67,7 +67,7 @@ test('Chinese point context includes the preceding and following sentences', asy
     { text: '这句。', start: 8, end: 11 },
     { text: '后句。', start: 15, end: 17 },
   ]));
-  assert.equal(spokenAround(transcript, 9), '前句。 这句。 后句。');
+  assert.equal(spokenAround(transcript, 9), '前句。这句。后句。');
 });
 
 test('EDL validates frame alignment and rejects trims outside the original proxy', async () => {
@@ -83,4 +83,57 @@ test('EDL validates frame alignment and rejects trims outside the original proxy
     source_in_seconds: 1, source_out_seconds: 3 });
   assert.throws(() => build(.25, 2), /frame boundary/);
   assert.throws(() => build(1.5, 2), /outside the composition or proxy/);
+});
+
+test('character-timed Chinese joins without spaces while spaced scripts keep them', async () => {
+  const { joinWords, parseTranscript, wordsBetween } = await import('./transcript.mjs');
+  assert.equal(joinWords(['它', '非常', '轻', '便', ',', '也', '很', '耐', '用', '。']), '它非常轻便,也很耐用。');
+  assert.equal(joinWords(['Hello', 'world', ',', 'again.']), 'Hello world, again.');
+  assert.equal(joinWords(['用', 'HyperFrames', '剪']), '用HyperFrames剪');
+  // Token-level quotes keep the head and tail of long Chinese ranges readable.
+  const chars = Array.from({ length: 80 }, (_, i) => ({ text: '字', start: i / 10, end: (i + 1) / 10 }));
+  assert.equal(wordsBetween(parseTranscript(JSON.stringify(chars)), 0, 8), '字'.repeat(80));
+});
+
+test('EDL lists shot cuts from segment edges and detected scene cuts inside the used media', async () => {
+  const { compositionEdl } = await import('./composition-edl.mjs');
+  const { shotSpans, snapToCut } = await import('./edl.mjs');
+  const asset = { proxy: 'media/cut.mp4', proxy_fps: 1, frame_count: 10, scene_cuts: [3, 6, 8],
+    proxy_to_source: [...Array(10).keys()], source_pts: [...Array(10).keys()], duration: 10 };
+  const edl = compositionEdl(`<main data-composition-id="test" data-fps="1" data-duration="7">
+    <video id="a" data-review-clip="cut" src="media/cut.mp4" data-start="0" data-media-start="0" data-duration="5"></video>
+    <video id="b" data-review-clip="cut" src="media/cut.mp4" data-start="5" data-media-start="8" data-duration="2"></video>
+    </main>`, { cut: asset });
+  // Cut 3 lies inside segment a, cut 6 was trimmed away, and cut 8 coincides with b's start.
+  assert.deepEqual(edl.cuts, [3, 5]);
+  assert.deepEqual(shotSpans(edl, 4, 5), [{ start_frame: 3, end_frame: 5 }]);
+  assert.deepEqual(shotSpans(edl, 2, 6).map(span => span.start_frame), [0, 3, 5]);
+  assert.equal(snapToCut(edl, 4, 1), 3);
+  assert.equal(snapToCut(edl, 4, 0), 4);
+  assert.equal(snapToCut(edl, 6, 1), 5); // A tie keeps the earlier cut.
+});
+
+test('the feedback prompt names the shot a note sits in', async () => {
+  const { feedbackPrompt } = await import('./feedback-format.mjs');
+  const prompt = feedbackPrompt('v1', [{ id: 'N1', kind: 'range', frame: 192, end_frame: 334, text: '删掉这段',
+    shots: [{ start_frame: 188, end_frame: 340 }] }]);
+  assert.match(prompt, /Shot cut to cut: F188–F340 \(end excluded\)/);
+});
+
+test('note quotes follow the edit and leave out speech this version cut', async () => {
+  const { withSpoken } = await import('./spoken.mjs');
+  const words = [['前句。', 1, 2], ['删掉的。', 4, 5], ['后句。', 7, 8]].map(([text, start, end]) => ({ text, start, end }));
+  const transcripts = { cut: { words, paragraphs: [0] } };
+  // The edit plays source 0–3 s, then jumps to source 6–9 s at composition 3 s.
+  const edl = { fps: 1, segments: [
+    { asset: 'cut', start_frame: 0, end_frame: 3, source_in_seconds: 0, source_out_seconds: 3 },
+    { asset: 'cut', start_frame: 3, end_frame: 6, source_in_seconds: 6, source_out_seconds: 9 },
+  ] };
+  const pin = withSpoken({ kind: 'pin', frame: 2 }, [], transcripts, edl);
+  assert.equal(pin.spoken_around, '前句。后句。');
+  const range = withSpoken({ kind: 'range', frame: 0, end_frame: 6 }, [], transcripts, edl);
+  assert.equal(range.spoken, '前句。后句。');
+  // A word timed slightly before a trim point still counts as played.
+  const trimmed = { ...edl, segments: [{ ...edl.segments[0], source_in_seconds: 1.6 }] };
+  assert.equal(withSpoken({ kind: 'range', frame: 0, end_frame: 3 }, [], transcripts, trimmed).spoken, '前句。');
 });

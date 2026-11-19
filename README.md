@@ -24,9 +24,9 @@ With the clone on disk and npm’s global bin directory on your `PATH`, `dailies
 dailies-axi open /path/to/rough-cut.mp4
 ```
 
-From your working directory, this creates `rough-cut-review/`, ingests the video as `cut`, builds `v1`, and opens it in Lavish. The command prints the review link under `session.url` before waiting in the foreground for feedback. Use `dailies-axi open /path/to/rough-cut.mp4 my-review --no-poll` to return after opening, then run `dailies-axi poll my-review/review/v1/review.html` when ready.
+From your working directory, this creates `rough-cut-review/`, ingests the video as `cut`, builds `v1`, and opens it in Lavish. Ingest detects shot cuts and transcribes the speech when local Whisper is available. The command prints the review link under `session.url` and the transcript status under `transcript` before waiting in the foreground for feedback. Use `dailies-axi open /path/to/rough-cut.mp4 my-review --no-poll` to return after opening, then run `dailies-axi poll my-review/review/v1/review.html` when ready.
 
-Pass a second path to name the workspace, `--asset ID` to name the proxy, or `--version vN` to choose the initial version number. Later builds follow that number in order and require locked feedback on the preceding version. If the workspace path already exists, `open` refuses. Use the individual commands below to continue in an existing workspace, including after a partial run.
+Pass a second path to name the workspace, `--asset ID` to name the proxy, or `--version vN` to choose the initial version number. Use `--language CODE` for speech other than Mandarin, `--srt FILE` for subtitles you already have, or `--no-transcribe` to skip speech. A missing or failed transcription never blocks the review. Later builds follow that number in order and require locked feedback on the preceding version. If the workspace path already exists, `open` refuses. Use the individual commands below to continue in an existing workspace, including after a partial run.
 
 ### Run the steps individually
 
@@ -40,20 +40,20 @@ dailies-axi review v1
 dailies-axi poll v1
 ```
 
-The first ingest fills the untouched `source/index.html` with the proxy’s dimensions, frame rate, duration, asset ID and audio setting. It leaves the original in place and writes the proxy and manifest under `media/`. Ingest additional clips under distinct asset IDs and use `--fps RATE` to conform them to the composition rate. Place later segments in the working composition with unique HTML IDs, `data-review-clip` set to the manifest asset ID, and a `media/<asset-id>.mp4` reference. Keep starts, durations and media starts on frame boundaries.
+The first ingest fills the untouched `source/index.html` with the proxy’s dimensions, frame rate, duration, asset ID and audio setting. It leaves the original in place and writes the proxy and manifest under `media/`. Every ingest records hard cuts in the proxy as `scene_cuts` and transcribes the asset when local Whisper is available. It accepts the same `--language`, `--srt` and `--no-transcribe` options as `open`. Ingest additional clips under distinct asset IDs and use `--fps RATE` to conform them to the composition rate. Place later segments in the working composition with unique HTML IDs, `data-review-clip` set to the manifest asset ID, and a `media/<asset-id>.mp4` reference. Keep starts, durations and media starts on frame boundaries.
 
 The proxy uses H.264 at a constant frame rate, with frequent keyframes and AAC when the source has audio. FFmpeg applies source rotation. The manifest records the source SHA-256, original timestamps, and proxy-to-source frame mapping, including gaps and repeated frames.
 
-### Optional local transcription
+### Local transcription
 
-Transcribe with either command after ingest and before the next build.
+`open` and `ingest` transcribe automatically. Use the `transcribe` command to redo an asset in another language or replace it with corrected subtitles, then build the next version.
 
 ```sh
-dailies-axi transcribe camera --language zh
+dailies-axi transcribe camera --language en
 dailies-axi transcribe camera --srt source/corrected.srt
 ```
 
-Automatic transcription uses local `whisper-cli` or `whisper-cpp` and defaults to Mandarin. Set `DAILIES_WHISPER` and `DAILIES_WHISPER_MODEL` to select the executable and a multilingual GGML model. You can also place the model under `~/.cache/hyperframes/whisper/models`. Dailies AXI never downloads a model. Corrected subtitles use original source times and take precedence over the automatic draft. Each build snapshots its transcripts.
+Automatic transcription uses local `whisper-cli` or `whisper-cpp` and defaults to Mandarin. Chinese and Japanese are timed per character or token, so transcript lines split at sentence punctuation and range quotes cover only the words inside the range. Whisper's word times can be off by a few tenths of a second, so check cut points against the picture and sound. Set `DAILIES_WHISPER` and `DAILIES_WHISPER_MODEL` to select the executable and a multilingual GGML model. You can also place the model under `~/.cache/hyperframes/whisper/models`. Dailies AXI never downloads a model. Corrected subtitles use original source times and take precedence over the automatic draft. Each build snapshots its transcripts.
 
 ## Animation quick start
 
@@ -69,9 +69,9 @@ This opens the 24-second Night Signal composition in Lavish. Keep the poll attac
 
 ## Review and revise
 
-1. In Lavish, scrub or step through frames, drag a rectangle over an area, drag on the timeline to mark a range, or use **Whole video** for a general note. Click transcript text to jump to its frame or Shift-click to select its range. Choose **Send feedback to agent** to submit the batch.
-2. Read the `dailies-axi poll` receipt and the version’s `notes.json`. The poll wrapper persists the first valid batch and locks that version’s review. It preserves the original Lavish receipt. If the batch was already locked, it prints the stored JSON.
-3. Check the version before editing. A note’s target file and selector locate candidate DOM elements. For footage, use `edl.json` and the note’s source spans to follow the edit across cuts. Ranges are half-open `[frame, end_frame)`. Source offsets use the original presentation timeline. A spatial anchor includes the exact `media_frame` and a normalized rectangle on the upright source when the placement supports it.
+1. In Lavish, scrub or step through frames, drag a rectangle over an area, drag on the timeline to mark a range, or use **Whole video** for a general note. Yellow ticks on the timeline mark shot cuts, and a dragged range snaps to a cut within a fifth of a second. Click transcript text to jump to its frame or Shift-click to select its range. The transcript shows only the speech this version plays. Choose **Send feedback to agent** to submit the batch.
+2. Read the `dailies-axi poll` receipt and the version’s `notes.json`. The poll wrapper persists the first valid batch and locks that version’s review. It keeps the Lavish session and prompts. Its `feedback` section names the notes file, EDL, transcripts and working composition, and its `next_step` replaces Lavish’s advice to edit the generated review page. The review page’s DOM snapshot is omitted. If the batch was already locked, it prints the stored JSON.
+3. Check the version before editing. A note’s target file and selector locate candidate DOM elements. For footage, use `edl.json` and the note’s source spans to follow the edit across cuts. Each note except a whole-video note lists the `shots` it touches as cut-to-cut frame ranges, and `edl.json` lists every cut under `cuts`. A note’s `spoken` or `spoken_around` quote is what the reviewer heard in that version. Ranges are half-open `[frame, end_frame)`. Source offsets use the original presentation timeline. A spatial anchor includes the exact `media_frame` and a normalized rectangle on the upright source when the placement supports it.
 4. For a frame grab, give the extractor the snapshot proxy and the note’s exact zero-based proxy frame.
 
    ```sh
@@ -87,7 +87,7 @@ This opens the 24-second Night Signal composition in Lavish. Keep the poll attac
    dailies-axi poll v2
    ```
 
-   Omit `--outcomes` if there’s no outcomes file. The new `version.json` records its parent, summary and outcomes. Lavish’s `reply` and `end` commands can close the previous session. If the reviewer chose **Send & End**, stop polling that session after reading its final receipt.
+   Omit `--outcomes` if there’s no outcomes file. The new `version.json` records its parent, summary and outcomes. The first `review` of a new version posts its link and summary in the previous version’s Lavish conversation, where each note also shows its outcome. Lavish’s `end` command can close the previous session. If the reviewer chose **Send & End**, stop polling that session after reading its final receipt.
 
 `build` defaults to `source/index.html` and writes to `review/vN/`. If no working composition exists, it uses the bundled animation. Use `--composition FILE` for another edit. If you use a custom media directory, pass the same `--media DIR` to ingest, transcribe, and build. If you pass a custom output directory to `build`, give `review` and `poll` its explicit `review.html` path. Paths resolve from the current directory. The runtime, GSAP and review page assets come from the installation.
 

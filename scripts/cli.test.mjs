@@ -84,10 +84,11 @@ test('sample build uses assets from the installation and writes to the caller', 
   assert.match(await readFile(review_file, 'utf8'), /Night Signal/);
 });
 
-async function openFixture(t) {
+async function openFixture(t, { audio = false } = {}) {
   const cwd = await mkdtemp(join(await realpath(tmpdir()), 'dailies-open-'));
   t.after(() => rm(cwd, { recursive: true, force: true }));
   const generated = spawnSync('ffmpeg', ['-v', 'error', '-f', 'lavfi', '-i', 'testsrc2=size=96x64:rate=10',
+    ...(audio ? ['-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=16000', '-c:a', 'aac'] : []),
     '-t', '0.5', '-c:v', 'libx264', join(cwd, 'rough cut.mp4')], { encoding: 'utf8' });
   assert.equal(generated.status, 0, generated.error?.message ?? generated.stderr);
   const tools = join(cwd, 'bin');
@@ -99,12 +100,27 @@ if (command === 'poll') {
   if (process.env.TEST_NO_POLL || ownerFlag !== '--owner' || owner !== 'video-review') process.exit(9);
   for await (const chunk of process.stdin) { /* Wait for the test to submit feedback. */ }
   const batch = { schema_version: 2, version: 'v1', notes: [{ id: 'N1', text: 'Synthetic feedback' }] };
-  console.log(encode({ prompts: [{ tag: 'video-review', prompt: 'Feedback\\n\\nContext data:\\n' + JSON.stringify(batch) }] }));
+  console.log(encode({ prompts: [{ tag: 'video-review', prompt: 'Feedback\\n\\nContext data:\\n' + JSON.stringify(batch) }],
+    next_step: 'Apply the requested changes to ' + file, dom_snapshot: 'uid=1 body' }));
+} else if (command === 'reply') {
+  const { appendFileSync } = await import('node:fs');
+  appendFileSync(process.env.TEST_REPLY_LOG, JSON.stringify(process.argv.slice(3)) + '\\n');
+  console.log(encode({ reply: { file, status: 'sent' } }));
 } else {
   console.log(encode({ session: { file: command, url: 'http://127.0.0.1/review', status: 'opened' } }));
 }
 `, { mode: 0o700 });
-  return { cwd, env: { ...process.env, PATH: tools + delimiter + process.env.PATH } };
+  // A stand-in for whisper.cpp that times one word, so open can transcribe offline.
+  await writeFile(join(tools, 'fake-whisper'), `#!/usr/bin/env node
+const args = process.argv.slice(2);
+// Unspaced scripts are timed per token, without -sow.
+if (args.includes('-sow')) process.exit(7);
+const out = args[args.indexOf('-of') + 1];
+require('node:fs').writeFileSync(out + '.json', JSON.stringify({ transcription: [{ text: '你好', offsets: { from: 0, to: 400 } }] }));
+`, { mode: 0o700 });
+  await writeFile(join(tools, 'ggml-large-v3-turbo-test.bin'), '');
+  return { cwd, tools, env: { ...process.env, PATH: tools + delimiter + process.env.PATH,
+    DAILIES_WHISPER: join(tools, 'missing-whisper'), TEST_REPLY_LOG: join(cwd, 'replies.log') } };
 }
 
 test('open publishes the link before feedback and a repeat preserves the locked batch', { timeout: 15000 }, async t => {
@@ -125,6 +141,10 @@ test('open publishes the link before feedback and a repeat preserves the locked 
   }
   assert.equal((await closed)[0], 0, stderr);
   assert.match(output, /Synthetic feedback/);
+  // The poll replaces Lavish's page-editing advice with the edit-and-build step.
+  assert.doesNotMatch(output, /dom_snapshot|Apply the requested changes/);
+  assert.match(output, /notes_file: .*notes\.json/);
+  assert.match(output, /dailies-axi build v2 --note/);
   const workspace = join(cwd, 'rough cut-review');
   assert.equal((await stat(workspace)).mode & 0o077, 0);
   const notes = join(workspace, 'review', 'v1', 'notes.json');
@@ -151,4 +171,64 @@ test('open --no-poll honors overrides and preserves the next-version lock', asyn
   const next = run(workspace, 'build', 'v5');
   assert.equal(next.status, 1);
   assert.match(next.stderr, /Poll and lock v4/);
+});
+
+test('open transcribes with local whisper and still opens when whisper is missing', async t => {
+  const { cwd, tools, env } = await openFixture(t, { audio: true });
+  const whisperEnv = { ...env, TEST_NO_POLL: '1', DAILIES_WHISPER: join(tools, 'fake-whisper'),
+    DAILIES_WHISPER_MODEL: join(tools, 'ggml-large-v3-turbo-test.bin') };
+  const result = spawnSync(process.execPath, [bin, 'open', 'rough cut.mp4', 'with speech', '--no-poll'],
+    { cwd, env: whisperEnv, encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(decode(result.stdout).transcript, { status: 'ready', source: 'whisper', language: 'zh' });
+  const page = await readFile(join(cwd, 'with speech', 'review', 'v1', 'review.html'), 'utf8');
+  assert.match(page, /你好/);
+
+  const missing = spawnSync(process.execPath, [bin, 'open', 'rough cut.mp4', 'no whisper', '--no-poll'],
+    { cwd, env: { ...env, TEST_NO_POLL: '1' }, encoding: 'utf8' });
+  assert.equal(missing.status, 0, missing.stderr);
+  const receipt = decode(missing.stdout);
+  assert.equal(receipt.transcript.status, 'unavailable');
+  assert.equal(receipt.session.url, 'http://127.0.0.1/review');
+
+  const skipped = spawnSync(process.execPath, [bin, 'open', 'rough cut.mp4', 'skipped', '--no-poll', '--no-transcribe'],
+    { cwd, env: whisperEnv, encoding: 'utf8' });
+  assert.equal(decode(skipped.stdout).transcript.status, 'skipped');
+  assert.throws(() => parseCommand(['open', 'cut.mp4', '--no-transcribe', '--language', 'en']), /cannot be combined/);
+
+  // A later clip ingested for a multi-clip composition is transcribed the same way.
+  const added = spawnSync(process.execPath, [bin, 'ingest', '../rough cut.mp4', 'take-2'],
+    { cwd: join(cwd, 'with speech'), env: whisperEnv, encoding: 'utf8' });
+  assert.equal(added.status, 0, added.stderr);
+  assert.equal(decode(added.stdout).transcript.status, 'ready');
+  assert.ok((await stat(join(cwd, 'with speech', 'media', 'take-2.transcript.json'))).size);
+});
+
+test('ingest records hard cuts and the next version posts its link in the previous review', { timeout: 20000 }, async t => {
+  const { cwd, env } = await openFixture(t);
+  const cuts = spawnSync('ffmpeg', ['-v', 'error', '-f', 'lavfi', '-i', 'color=c=blue:s=96x64:r=10:d=1',
+    '-f', 'lavfi', '-i', 'color=c=red:s=96x64:r=10:d=1', '-filter_complex', '[0][1]concat=n=2:v=1',
+    '-c:v', 'libx264', join(cwd, 'two shots.mp4')], { encoding: 'utf8' });
+  assert.equal(cuts.status, 0, cuts.stderr);
+  const child = spawn(process.execPath, [bin, 'open', 'two shots.mp4'], { cwd, env, signal: t.signal });
+  t.after(() => child.stdin.end());
+  child.stdout.once('data', () => child.stdin.end());
+  assert.equal((await once(child, 'close'))[0], 0);
+  const workspace = join(cwd, 'two shots-review');
+  const manifest = JSON.parse(await readFile(join(workspace, 'media', 'manifest.json'), 'utf8'));
+  assert.deepEqual(manifest.assets.cut.scene_cuts, [10]);
+  const edl = JSON.parse(await readFile(join(workspace, 'review', 'v1', 'edl.json'), 'utf8'));
+  assert.deepEqual(edl.cuts, [10]);
+
+  assert.equal(run(workspace, 'build', 'v2', '--note', 'Trimmed').status, 0);
+  const opened = spawnSync(process.execPath, [bin, 'review', 'v2'], { cwd: workspace, env, encoding: 'utf8' });
+  assert.equal(opened.status, 0, opened.stderr);
+  assert.match(decode(opened.stdout).announced, /Posted the v2 link in the v1 review/);
+  const [previous, flag, message] = JSON.parse(await readFile(join(cwd, 'replies.log'), 'utf8'));
+  assert.equal(previous, join(workspace, 'review', 'v1', 'review.html'));
+  assert.equal(flag, '--agent-reply');
+  assert.equal(message, 'v2 is ready for review: http://127.0.0.1/review\n\nTrimmed');
+  // Reopening the same version does not repeat the announcement.
+  spawnSync(process.execPath, [bin, 'review', 'v2'], { cwd: workspace, env, encoding: 'utf8' });
+  assert.equal((await readFile(join(cwd, 'replies.log'), 'utf8')).trim().split('\n').length, 1);
 });
