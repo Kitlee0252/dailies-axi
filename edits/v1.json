@@ -1,0 +1,1 @@
+{"version":"v1","source":"source/sample.mp4","segments":[{"id":"seg-01","in":0,"out":15,"volume":1},{"id":"seg-02","in":15,"out":30,"volume":1}],"subtitles":[{"start":4,"end":12,"text":"A sample subtitle","position":"bottom"}],"overlays":[{"start":15,"end":22,"text":"Review this cut","position":"top"}],"volume":0.5}
