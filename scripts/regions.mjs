@@ -21,3 +21,31 @@ export function intersects(first, second) {
 export function frameAt(seconds, fps, count) {
   return Math.max(0, Math.min(count - 1, Math.floor(seconds * fps + 1e-8)));
 }
+
+export function frameMidpoint(frame, fps) {
+  return (frame + .5) / fps;
+}
+
+// Coordinates share the same viewport. CSS scale/translation is recovered from the
+// ratio of the painted element bounds to its untransformed content box.
+export function rectInSource(rect, box, width, height, fit, position, layout = box) {
+  if (!intersects(rect, box) || !(width > 0 && height > 0)) return null;
+  const contain = Math.min(layout.width / width, layout.height / height);
+  const cover = Math.max(layout.width / width, layout.height / height);
+  const scale = { contain, cover, none: 1, 'scale-down': Math.min(1, contain) }[fit];
+  const paintedWidth = scale === undefined ? box.width : width * scale * box.width / layout.width;
+  const paintedHeight = scale === undefined ? box.height : height * scale * box.height / layout.height;
+  const [horizontal, vertical] = position.split(/\s+/);
+  const offset = (token, free, magnification) => {
+    if (token?.endsWith('%')) return parseFloat(token) / 100 * free;
+    if (token?.endsWith('px')) return parseFloat(token) * magnification;
+    return free / 2;
+  };
+  const left = box.x + offset(horizontal, box.width - paintedWidth, box.width / layout.width);
+  const top = box.y + offset(vertical, box.height - paintedHeight, box.height / layout.height);
+  const x = clamp((Math.max(rect.x, box.x) - left) / paintedWidth);
+  const y = clamp((Math.max(rect.y, box.y) - top) / paintedHeight);
+  const right = clamp((Math.min(rect.x + rect.width, box.x + box.width) - left) / paintedWidth);
+  const bottom = clamp((Math.min(rect.y + rect.height, box.y + box.height) - top) / paintedHeight);
+  return right > x && bottom > y ? { x, y, width: right - x, height: bottom - y } : null;
+}

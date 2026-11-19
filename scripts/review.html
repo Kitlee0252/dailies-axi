@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Night Signal · Frame review</title>
+  <title>Frame review</title>
   <style>
     * { box-sizing: border-box }
     :root { color-scheme: dark; font: 16px system-ui; color: #f1edff; background: #11111b; --muted: #beb7d0; --mint: #b8f3d8; --line: #413a53 }
@@ -20,7 +20,20 @@
     #markers { pointer-events: none }
     .region { position: absolute; border: 2px solid var(--mint); background: #b8f3d822 }
     .region b { position: absolute; left: 0; top: 0; background: var(--mint); color: #131824; font: bold 12px system-ui; padding: 1px 5px }
-    #composer { position: absolute; z-index: 1; width: min(330px, calc(100% - 16px)); padding: 12px; border: 1px solid var(--line); border-radius: 9px; background: #211d30; box-shadow: 0 8px 32px #0009 }
+    #composer { margin: 10px auto; z-index: 1; width: min(330px, calc(100% - 16px)); padding: 12px; border: 1px solid var(--line); border-radius: 9px; background: #211d30; box-shadow: 0 8px 32px #0009 }
+    #composer.spatial { position: absolute; margin: 0 }
+    #surface.locked { cursor: default }
+    #timeline { height: 24px; margin-top: 8px; background: #262236; position: relative; border: 1px solid var(--line); border-radius: 6px; cursor: crosshair; touch-action: none }
+    #timeline span { position: absolute; top: 2px; bottom: 2px; pointer-events: none }
+    .clip-span { background: #685b85; border-right: 1px solid #211d30 }
+    .noted-span { background: #8cb4bf }
+    .selected-span { background: #b8f3d8 }
+    #note-tools { margin: 10px 0 14px }
+    #note-tools .row { margin-top: 8px }
+    #note-tools input { width: 6em }
+    #source-frame { font-size: .85rem }
+    #transcript { margin: 12px 0 }
+    #words { max-height: 11em; overflow: auto }
     #stage { position: relative }
     button, textarea, input { font: inherit }
     button { border: 1px solid var(--line); border-radius: 6px; padding: 7px 11px; background: #262236; color: inherit; cursor: pointer }
@@ -41,9 +54,9 @@
 </head>
 <body>
 <main>
-  <div class="eyebrow">Northstar / Frame review / <span id="version"></span></div>
+  <div class="eyebrow">Frame review / <span id="version"></span></div>
   <h1>Point to what should change</h1>
-  <p>Scrub or play, then click for a small box or drag around any part of the frame.</p>
+  <p>Draw a region on the frame or drag on the timeline to select a range.</p>
   <div id="stage">
     <div id="canvas">
       <iframe id="composition" title="Live HyperFrames composition" sandbox="allow-scripts" tabindex="-1"></iframe>
@@ -64,8 +77,29 @@
     <input id="seek" type="range" min="0" max="0" value="0" aria-label="Frame" disabled>
     <output id="time" for="seek"></output>
   </div>
+  <p id="source-frame"></p>
+  <div id="timeline" hidden data-lavish-action aria-label="Drag to select a range"></div>
+  <section id="note-tools" hidden>
+    <div class="row">
+      <label>Start frame <input id="range-start" type="number" min="0" step="1"></label>
+      <label>End frame (excluded) <input id="range-end" type="number" min="1" step="1"></label>
+      <button id="clear-range">Clear range</button>
+      <button id="add-range">Add range note</button>
+      <button id="whole" aria-keyshortcuts="W">Whole video</button>
+    </div>
+  </section>
+  <details id="transcript" open hidden>
+    <summary>Transcript</summary>
+    <p>Select a line to jump to it. Shift-click selects its range.</p>
+    <div id="words" class="row"></div>
+  </details>
+  <details id="history" open hidden>
+    <summary>Previous round</summary>
+    <p id="version-summary"></p>
+    <ul id="previous-notes"></ul>
+  </details>
   <h2>Notes <span id="count"></span></h2>
-  <p id="empty">No notes yet. Select a region to add one.</p>
+  <p id="empty">No notes yet.</p>
   <ol id="notes"></ol>
   <button id="send" class="primary" disabled>Send feedback to agent</button>
   <p id="status" role="status">Loading live composition…</p>

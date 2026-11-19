@@ -1,23 +1,28 @@
-import { pickRect, intersects, frameAt } from './regions.mjs';
+import { pickRect, frameAt } from './regions.mjs';
+import { mapInterval } from './edl.mjs';
+import { commentAt, feedbackPrompt, sortNotes } from './feedback-format.mjs';
+import { transcriptCues, withSpoken } from './spoken.mjs';
 
 const $ = selector => document.querySelector(selector);
 const iframe = $('#composition'), canvas = $('#canvas'), surface = $('#surface');
-const composer = $('#composer'), input = $('#feedback'), seek = $('#seek');
-const notes = [];
-let port, ready, width, height, fps, frameCount, playback;
-let frame = 0, gesture, draft, selectionRequest = 0, anim, sending = false, noteCount = 0;
-$('#version').textContent = config.version;
+const composer = $('#composer'), input = $('#feedback'), seek = $('#seek'), timeline = $('#timeline');
+const { edl, assets, transcripts, version, record } = config;
+let notes = [], locked = false, stateLoaded = false, sent = false;
+let port, ready, width, height, fps, frameCount, playing = false, positioned = false;
+let frame = 0, gesture, draft, request = 0, noteCount = 0, range, dragRange;
+$('#version').textContent = version;
 const status = message => { $('#status').textContent = message; };
+const editable = () => ready && stateLoaded && !locked && !sent;
 
 function resize() {
   if (!ready) return;
   iframe.style.transform = `scale(${canvas.clientWidth / width})`;
-  if (draft) placeComposer(draft.rect);
+  if (draft?.rect) placeComposer(draft.rect);
 }
 
 function redraw() {
-  const active = notes.filter(note => note.frame === frame);
-  if (draft) active.push(draft);
+  const active = notes.filter(note => note.rect && note.frame === frame);
+  if (draft?.rect) active.push(draft);
   if (gesture?.rect) active.push({ rect: gesture.rect });
   $('#markers').replaceChildren(...active.map(({ rect, id }) => {
     const box = document.createElement('div');
@@ -29,54 +34,65 @@ function redraw() {
   }));
 }
 
+function drawTimeline() {
+  const selected = range ?? dragRange;
+  const spans = [
+    ...edl.segments.map(segment => [segment.start_frame, segment.end_frame, 'clip-span']),
+    ...notes.filter(note => note.kind === 'range').map(note => [note.frame, note.end_frame, 'noted-span']),
+    ...(selected ? [[selected.start, selected.end, 'selected-span']] : []),
+  ];
+  timeline.replaceChildren(...spans.map(([start, end, className]) => {
+    const span = Object.assign(document.createElement('span'), { className });
+    span.style.left = `${start / frameCount * 100}%`;
+    span.style.width = `${(end - start) / frameCount * 100}%`;
+    return span;
+  }));
+  updateRangeFields();
+}
+
+function updateRangeFields() {
+  $('#range-start').value = range?.start ?? frame;
+  $('#range-end').value = range?.end ?? Math.min(frame + 1, frameCount);
+}
+
 function showFrame(index) {
   frame = index;
   seek.value = index;
   $('#time').textContent = `${(index / fps).toFixed(3)} s · F${index}`;
+  const spans = mapInterval(edl, assets, index, index + 1);
+  $('#source-frame').textContent = spans.map(span =>
+    `${span.clip} · source F${span.source_frame}${span.repeated ? ' · repeated proxy frame' : ''}`).join(' / ');
+  if (!range && !dragRange) updateRangeFields();
   redraw();
 }
 
-function pause() {
-  cancelAnimationFrame(anim);
-  playback = null;
-  $('#play').textContent = 'Play';
-}
-
-function gotoFrame(index) {
-  const nextFrame = Math.max(0, Math.min(frameCount - 1, index));
-  port.postMessage({ frame: nextFrame });
-  showFrame(nextFrame);
-}
-
-function tick(now) {
-  const index = frameAt(playback.frame / fps + (now - playback.start) / 1000, fps, frameCount);
-  if (index !== frame) gotoFrame(index);
-  if (index === frameCount - 1) pause();
-  else anim = requestAnimationFrame(tick);
+function seekFrame(index, { play = false, rect } = {}) {
+  const next = Math.max(0, Math.min(frameCount - 1, index));
+  positioned = false;
+  playing = play;
+  $('#play').textContent = play ? 'Pause' : 'Play';
+  showFrame(next);
+  port.postMessage({ frame: next, play, rect, request: ++request });
 }
 
 function closeComposer() {
   draft = null;
   composer.hidden = true;
+  composer.classList.remove('spatial');
   input.value = '';
   redraw();
 }
 
 $('#play').onclick = () => {
   if (!ready || gesture) return;
-  if (playback) return pause();
   closeComposer();
-  if (frame === frameCount - 1) gotoFrame(0);
-  playback = { frame, start: performance.now() };
-  $('#play').textContent = 'Pause';
-  anim = requestAnimationFrame(tick);
+  seekFrame(!playing && frame === frameCount - 1 ? 0 : frame, { play: !playing });
 };
 
 function navigate(index) {
   if (!ready || gesture) return;
   closeComposer();
-  pause();
-  gotoFrame(index);
+  seekFrame(index);
 }
 
 seek.oninput = () => navigate(Number(seek.value));
@@ -96,11 +112,22 @@ function placeComposer(rect) {
   composer.style.top = `${bottom + composer.offsetHeight + 8 > canvas.clientHeight && above >= 0 ? above : bottom + 8}px`;
 }
 
+function openComposer(note, waiting = false) {
+  draft = { ...note, version, time_seconds: note.frame / fps, targets: [] };
+  $('#targets').textContent = waiting ? 'Finding editable elements and footage…' : commentAt(draft);
+  composer.querySelector('[type=submit]').disabled = waiting;
+  composer.classList.toggle('spatial', Boolean(note.rect));
+  composer.hidden = false;
+  if (note.rect) placeComposer(note.rect);
+  redraw();
+  input.focus({ preventScroll: true });
+}
+
 surface.onpointerdown = event => {
-  if (!ready || !event.isPrimary || event.button !== 0 || gesture) return;
+  if (!editable() || (!positioned && !playing) || !event.isPrimary || event.button !== 0 || gesture) return;
   event.preventDefault();
   closeComposer();
-  pause();
+  if (playing) seekFrame(frame);
   gesture = { id: event.pointerId, start: position(event), clientX: event.clientX, clientY: event.clientY };
   if (event.isTrusted) surface.setPointerCapture(event.pointerId);
 };
@@ -120,69 +147,241 @@ surface.onpointerup = event => {
   if (gesture?.id !== event.pointerId) return;
   const rect = selection(event);
   gesture = null;
-  if (rect.width <= 0 || rect.height <= 0) return redraw();
-  draft = { version: config.version, time_seconds: frame / fps, frame, rect };
-  $('#targets').textContent = 'Finding editable elements…';
-  composer.querySelector('[type=submit]').disabled = true;
-  port.postMessage({ frame, rect, request: ++selectionRequest });
-  composer.hidden = false;
-  placeComposer(rect);
-  redraw();
-  input.focus({ preventScroll: true });
+  if (!editable() || rect.width <= 0 || rect.height <= 0) return redraw();
+  // Range rectangles are evaluated at the currently displayed frame, even
+  // when the selected range starts on a different clip.
+  const regionFrame = frame;
+  const scoped = range && regionFrame >= range.start && regionFrame < range.end;
+  openComposer(scoped
+    ? { kind: 'range', frame: range.start, end_frame: range.end, region_frame: regionFrame, rect }
+    : { kind: 'pin', frame: regionFrame, rect }, true);
+  seekFrame(regionFrame, { rect });
 };
 
 surface.onpointercancel = surface.onlostpointercapture = () => { gesture = null; redraw(); };
+
+function timelineFrame(event) {
+  const bounds = timeline.getBoundingClientRect();
+  return frameAt((event.clientX - bounds.left) / bounds.width * frameCount, 1, frameCount);
+}
+timeline.onpointerdown = event => {
+  if (!editable() || !event.isPrimary || event.button !== 0) return;
+  closeComposer();
+  const start = timelineFrame(event);
+  range = null;
+  dragRange = { id: event.pointerId, origin: start, start, end: start + 1 };
+  if (event.isTrusted) timeline.setPointerCapture(event.pointerId);
+  seekFrame(start);
+  drawTimeline();
+};
+timeline.onpointermove = event => {
+  if (dragRange?.id !== event.pointerId) return;
+  const index = timelineFrame(event);
+  dragRange.start = Math.min(index, dragRange.origin);
+  dragRange.end = Math.max(index, dragRange.origin) + 1;
+  drawTimeline();
+};
+timeline.onpointerup = event => {
+  if (dragRange?.id !== event.pointerId) return;
+  timeline.onpointermove(event);
+  range = { start: dragRange.start, end: dragRange.end };
+  dragRange = null;
+  drawTimeline();
+};
+timeline.onpointercancel = () => { dragRange = null; drawTimeline(); };
+
+for (const selector of ['#range-start', '#range-end']) {
+  $(selector).onchange = () => {
+    if (!editable()) return;
+    closeComposer();
+    const start = Math.max(0, Math.min(frameCount - 1, Math.round(Number($('#range-start').value))));
+    const end = Math.max(start + 1, Math.min(frameCount, Math.round(Number($('#range-end').value))));
+    range = { start, end };
+    seekFrame(start);
+    drawTimeline();
+  };
+}
+$('#clear-range').onclick = () => { closeComposer(); range = null; drawTimeline(); };
+$('#add-range').onclick = () => {
+  if (!editable()) return;
+  const start = range?.start ?? frame, end = range?.end ?? frame + 1;
+  seekFrame(start);
+  openComposer({ kind: 'range', frame: start, end_frame: end });
+};
+$('#whole').onclick = () => {
+  if (!editable()) return;
+  if (playing) seekFrame(frame);
+  openComposer({ kind: 'general', frame: 0, end_frame: frameCount, whole_video: true });
+};
+document.addEventListener('keydown', event => {
+  if (event.altKey || event.metaKey || event.ctrlKey || event.target.closest('textarea,input,button')) return;
+  if (event.key.toLowerCase() === 'w') $('#whole').click();
+  if (event.key === 'Escape' && !draft) $('#clear-range').click();
+  if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+    event.preventDefault();
+    navigate(frame + (event.key === 'ArrowLeft' ? -1 : 1));
+  }
+});
+
 $('#cancel').onclick = closeComposer;
 composer.onkeydown = event => { if (event.key === 'Escape') closeComposer(); };
 composer.onsubmit = event => {
   event.preventDefault();
   const text = input.value.trim();
-  if (!draft?.targets || !text) return;
-  notes.push({ ...draft, id: `N${++noteCount}`, text });
+  if (!editable() || !draft || composer.querySelector('[type=submit]').disabled || !text) return;
+  const spans = mapInterval(edl, assets, draft.frame, draft.end_frame ?? draft.frame + 1);
+  const note = withSpoken({ ...draft, id: `N${++noteCount}`, text }, spans, transcripts);
+  notes.push(note);
+  range = null;
   closeComposer();
   renderNotes();
   status('Note added locally. Send when ready.');
 };
 
+function mediaBoundary(asset, low, high, seconds, strictlyAfter) {
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2);
+    const pts = asset.source_pts[asset.proxy_to_source[middle]];
+    if (pts < seconds || (strictlyAfter && pts === seconds)) low = middle + 1;
+    else high = middle;
+  }
+  return low;
+}
+
+function renderTranscript() {
+  const items = edl.segments.flatMap(segment => {
+    const asset = assets[segment.asset];
+    const startSeconds = segment.source_in_seconds, endSeconds = segment.source_out_seconds;
+    return transcriptCues(transcripts[segment.asset]).flatMap(cue => {
+      if (cue.end <= startSeconds || cue.start >= endSeconds) return [];
+      const boundary = mediaBoundary(asset, segment.media_in, segment.media_out, cue.start, true);
+      let start = Math.max(segment.media_in, boundary - 1);
+      // Repeats can share the cue's exact start PTS.
+      if (asset.source_pts[asset.proxy_to_source[start]] === cue.start) {
+        start = mediaBoundary(asset, segment.media_in, boundary, cue.start, false);
+      }
+      const end = mediaBoundary(asset, start + 1, segment.media_out, cue.end, false);
+      const first = segment.start_frame + start - segment.media_in;
+      const last = segment.start_frame + end - segment.media_in;
+      const item = document.createElement('span');
+      const button = Object.assign(document.createElement('button'), {
+        textContent: cue.words.map(word => word.text).join(' '), title: `Jump to F${first}. Shift-click to select these words.`,
+      });
+      button.onclick = event => {
+        navigate(first);
+        if (event.shiftKey && editable()) {
+          range = { start: first, end: last };
+          drawTimeline();
+        }
+      };
+      item.append(button);
+      return [item];
+    });
+  });
+  $('#transcript').hidden = !items.length;
+  $('#words').replaceChildren(...items);
+}
+
 function renderNotes() {
   $('#count').textContent = `(${notes.length})`;
   $('#empty').hidden = notes.length > 0;
-  $('#send').disabled = sending || !notes.length;
-  $('#notes').replaceChildren(...notes.map(note => {
+  $('#send').disabled = !editable() || !notes.length;
+  $('#note-tools').hidden = !editable();
+  timeline.hidden = !editable() && !edl.segments.length && !notes.some(note => note.kind === 'range');
+  $('#send').hidden = locked || sent;
+  surface.classList.toggle('locked', locked || sent);
+  $('#notes').replaceChildren(...sortNotes(notes).map(note => {
     const item = document.createElement('li');
     const controls = Object.assign(document.createElement('div'), { className: 'row' });
-    const jump = Object.assign(document.createElement('button'), { textContent: `${note.id} · Frame ${note.frame}` });
-    jump.onclick = () => navigate(note.frame);
-    const remove = Object.assign(document.createElement('button'), { textContent: 'Delete', disabled: sending });
-    remove.setAttribute('aria-label', `Delete note ${note.id}`);
-    remove.onclick = () => { notes.splice(notes.indexOf(note), 1); renderNotes(); };
-    controls.append(jump, document.createTextNode(note.targets.map(target => target.selector).join(', ') || 'Background'), remove);
+    const jump = Object.assign(document.createElement('button'), { textContent: `${note.id} · ${commentAt(note)}` });
+    jump.onclick = () => navigate(note.region_frame ?? note.frame);
+    controls.append(jump);
+    const targets = note.targets?.map(target => target.selector).join(', ');
+    if (targets) controls.append(document.createTextNode(targets));
+    if (editable()) {
+      const remove = Object.assign(document.createElement('button'), { textContent: 'Delete' });
+      remove.setAttribute('aria-label', `Delete note ${note.id}`);
+      remove.onclick = () => {
+        if (editable()) { notes.splice(notes.indexOf(note), 1); renderNotes(); }
+      };
+      controls.append(remove);
+    }
     item.append(controls, Object.assign(document.createElement('p'), { textContent: note.text }));
+    const spoken = note.spoken ?? note.spoken_around;
+    if (spoken) item.append(Object.assign(document.createElement('p'), { textContent: `Spoken · ${spoken}` }));
+    const resolution = nextVersion?.resolutions[note.id];
+    if (resolution) item.append(Object.assign(document.createElement('p'), {
+      textContent: `Addressed in ${resolution.version} · ${resolution.note}`,
+    }));
     return item;
   }));
+  drawTimeline();
   redraw();
 }
 
+let nextVersion;
+window.reviewState = state => {
+  let changed = false;
+  if ('notes' in state) {
+    changed = !stateLoaded;
+    stateLoaded = true;
+    if (state.notes) {
+      const firstLock = !locked;
+      locked = true;
+      changed = firstLock;
+      notes = state.notes;
+      if (firstLock) {
+        closeComposer();
+        status('Feedback locked. This round is read-only.');
+      }
+    }
+  }
+  if (state.next) {
+    nextVersion = state.next;
+    changed = true;
+  }
+  if (ready && changed) renderNotes();
+};
+function refreshState(file) {
+  const script = document.createElement('script');
+  script.src = `${file}?t=${Date.now()}`;
+  script.onload = script.onerror = () => script.remove();
+  document.head.append(script);
+}
+function refreshReview() {
+  if (!locked) refreshState('notes.js');
+  if (!nextVersion) refreshState('next.js');
+}
+refreshReview();
+setInterval(refreshReview, 2000);
+
+if (record.parent) {
+  $('#history').hidden = false;
+  $('#version-summary').textContent = record.note || `Follow-up to ${record.parent}`;
+  $('#previous-notes').replaceChildren(...config.previousNotes.map(note => {
+    const result = record.resolutions[note.id]?.note ?? 'No outcome recorded';
+    return Object.assign(document.createElement('li'), { textContent: `${note.id} · ${note.text} → ${result}` });
+  }));
+}
+
 $('#send').onclick = async () => {
-  if (sending || !notes.length) return;
+  if (!editable() || !notes.length) return;
   if (!window.lavish?.queuePrompt || !window.lavish?.sendQueuedPrompts) return status('Open with lavish-axi to send feedback.');
-  const batch = structuredClone(notes);
-  sending = true;
+  const batch = structuredClone(sortNotes(notes));
+  sent = true;
+  closeComposer();
   renderNotes();
   try {
-    await window.lavish.queuePrompt(`Apply every region note for ${config.version}.`, { tag: 'video-review',
-      text: `${batch.length} region note(s) for ${config.version}`,
-      queueKey: `region-review-${config.version}`,
-      data: { schema_version: 1, version: config.version, composition: 'composition/index.html',
-        width, height, fps, notes: batch } });
+    await window.lavish.queuePrompt(feedbackPrompt(version, batch), { tag: 'video-review',
+      text: `${batch.length} note(s) for ${version}`, queueKey: `region-review-${version}`,
+      data: { schema_version: 2, version, composition: 'composition/index.html',
+        width, height, fps, frame_count: frameCount, notes: batch } });
     const result = await window.lavish.sendQueuedPrompts();
     if (result === false || result?.ok === false) throw new Error('Lavish rejected this batch');
-    notes.splice(0, batch.length);
-    status('Submitted to Lavish. The agent can receive this batch through poll.');
+    if (!locked) status('Submitted to Lavish. Waiting for the agent’s poll to lock this round.');
   } catch {
-    status('Could not send. Notes are still here; try again.');
-  } finally {
-    sending = false;
+    sent = false;
+    status('Could not send. Notes are still here. Try again.');
     renderNotes();
   }
 };
@@ -192,10 +391,30 @@ iframe.addEventListener('load', () => {
   port = channel.port1;
   const timer = setTimeout(() => status('Cannot load live review: no response from the composition.'), 8500);
   port.onmessage = ({ data }) => {
-    if (data.kind === 'targets') {
-      if (draft && data.request === selectionRequest) {
+    if (data.kind === 'seek-error') {
+      return status(data.message);
+    }
+    if (data.kind === 'playback') {
+      if (data.request !== request) return;
+      playing = data.playing;
+      $('#play').textContent = playing ? 'Pause' : 'Play';
+      showFrame(data.frame);
+      if (!playing) seekFrame(data.frame);
+      return;
+    }
+    if (data.kind === 'positioned') {
+      if (data.request !== request) return;
+      positioned = true;
+      if (draft?.rect && data.targets) {
         draft.targets = data.targets;
-        $('#targets').textContent = draft.targets.map(target => target.selector).join(', ') || 'No editable element · background region';
+        draft.footage = data.footage.map(anchor => ({
+          ...mapInterval(edl, assets, data.frame, data.frame + 1).find(span => span.clip === anchor.clip),
+          ...anchor,
+        }));
+        $('#targets').textContent = [
+          ...draft.targets.map(target => target.selector),
+          ...draft.footage.map(anchor => `${anchor.clip} · source F${anchor.source_frame}`),
+        ].join(', ') || 'Background region';
         composer.querySelector('[type=submit]').disabled = false;
         placeComposer(draft.rect);
       }
@@ -205,14 +424,20 @@ iframe.addEventListener('load', () => {
     if (data.kind === 'error') return status(`Cannot load live review: ${data.message}`);
     if (data.kind !== 'ready') return;
     ({ width, height, fps, frameCount } = data);
+    if (frameCount !== edl.frame_count || fps !== edl.fps) return status('Composition timing differs from its EDL.');
     ready = true;
+    canvas.style.width = `min(100%, ${Math.min(width, 560 * width / height)}px)`;
     canvas.style.aspectRatio = `${width} / ${height}`;
     Object.assign(iframe.style, { width: `${width}px`, height: `${height}px` });
     resize();
     seek.max = frameCount - 1;
+    $('#range-start').max = frameCount - 1;
+    $('#range-end').max = frameCount;
     for (const selector of ['#play', '#previous', '#next', '#seek']) $(selector).disabled = false;
-    gotoFrame(0);
-    status('Ready. Click or drag on the frame to add feedback.');
+    seekFrame(0);
+    renderTranscript();
+    renderNotes();
+    status(locked ? 'Feedback locked. This round is read-only.' : 'Ready. Select a region, drag a range, or add a whole-video note.');
   };
   iframe.contentWindow.postMessage('frame-review:connect', '*', [channel.port2]);
 }, { once: true });

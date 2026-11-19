@@ -1,29 +1,108 @@
-import { copyFile, mkdir, readFile, writeFile } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
+// Video snapshot cloning adapted from framejam src/server/json-store.ts (snapshotVideo).
+// https://github.com/moritzkremb/framejam/blob/bc45364aff90ba931d350e931291940fdc6e604c/src/server/json-store.ts
+// MIT License, Copyright (c) 2026 Moritz Kremb. See third_party/framejam/LICENSE.
+import { constants } from 'node:fs';
+import { copyFile, mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
+import { basename, join, resolve } from 'node:path';
+import { parseArgs } from 'node:util';
+import { compositionEdl } from './composition-edl.mjs';
+import { readManifest, writeJson } from './manifest.mjs';
+import { projectState, readNotes } from './notes.mjs';
 
-const [version, outputRoot = 'review'] = process.argv.slice(2);
-if (!/^v[1-9]\d*$/.test(version ?? '')) throw new Error('Usage: node scripts/build-review.mjs vN [output-directory]');
+const { positionals: [version, outputRoot = 'review', extra], values } = parseArgs({
+  allowPositionals: true, options: {
+    composition: { type: 'string' }, media: { type: 'string', default: 'media' },
+    note: { type: 'string', default: '' }, outcomes: { type: 'string' },
+  },
+});
+if (!/^v[1-9]\d*$/.test(version ?? '') || extra) {
+  throw new Error('Usage: node scripts/build-review.mjs vN [output-directory] [--composition FILE] [--media DIR] [--note SUMMARY] [--outcomes FILE]');
+}
 const here = path => new URL(`../${path}`, import.meta.url);
 const text = path => readFile(here(path), 'utf8');
-const [composition, gsap, runtime, template, regions, review, bridge] = await Promise.all([
-  text('composition/index.html'), text('node_modules/gsap/dist/gsap.min.js'),
-  text('node_modules/hyperframes/dist/hyperframe.runtime.iife.js'), text('scripts/review.html'),
-  text('scripts/regions.mjs'), text('scripts/review.mjs'), text('scripts/composition-bridge.js'),
-]);
-const inline = code => `<script>${code.replace(/<\/script/gi, '<\\/script')}</script>`;
-const liveComposition = composition.replace('<script src="gsap.min.js"></script>', () => inline(gsap))
-  .replace('</body>', () => `${inline(runtime)}${inline(`${regions.replace(/^export /gm, '')}\n${bridge}`)}</body>`);
-const reviewCode = review.replace(/^import .*;\n/, '');
-const config = JSON.stringify({ version, liveComposition }).replace(/</g, '\\u003c');
-const page = template.replace('<!-- REVIEW_SCRIPT -->', () => inline(
-  `const config = ${config};\n${regions.replace(/^export /gm, '')}\n${reviewCode}`));
+const gsapPath = 'node_modules/gsap/dist/gsap.min.js';
+const gsapBanner = '/*! GSAP 3.15.1 — GreenSock Standard License — https://gsap.com/standard-license/ */\n';
+const runtimeBanner = '/*! HyperFrames 0.9.69 — Apache-2.0 — https://github.com/heygen-com/hyperframes */\n';
+const [composition, gsap, runtime, template, regions, review, bridge, edlCode, transcriptCode, spokenCode, feedbackCode] =
+  await Promise.all([
+    values.composition ? readFile(resolve(values.composition), 'utf8') : text('composition/index.html'),
+    text(gsapPath), text('node_modules/hyperframes/dist/hyperframe.runtime.iife.js'), text('scripts/review.html'),
+    text('scripts/regions.mjs'), text('scripts/review.mjs'), text('scripts/composition-bridge.js'), text('scripts/edl.mjs'),
+    text('scripts/transcript.mjs'), text('scripts/spoken.mjs'), text('scripts/feedback-format.mjs'),
+  ]);
 
-const folder = resolve(outputRoot, version);
-const project = join(folder, 'composition');
-await mkdir(resolve(outputRoot), { recursive: true });
-await mkdir(folder);
-await mkdir(project);
-await writeFile(join(project, 'index.html'), composition);
-await copyFile(here('node_modules/gsap/dist/gsap.min.js'), join(project, 'gsap.min.js'));
-await writeFile(join(folder, 'review.html'), page);
-console.log(folder);
+const dir = resolve(values.media);
+const manifest = await readManifest(dir);
+const edl = compositionEdl(composition, manifest.assets);
+const assets = Object.fromEntries(edl.segments.map(({ asset }) => [asset, manifest.assets[asset]]));
+const transcripts = {};
+for (const [id, asset] of Object.entries(assets)) {
+  try {
+    const transcript = JSON.parse(await readFile(join(dir, `${id}.transcript.json`), 'utf8'));
+    if (transcript.source_sha256 === asset.source_sha256) transcripts[id] = transcript;
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+  }
+}
+const root = resolve(outputRoot);
+const folder = join(root, version);
+const number = Number(version.slice(1));
+const parent = number > 1 ? `v${number - 1}` : null;
+await mkdir(root, { recursive: true });
+const lock = join(root, '.build-lock');
+await mkdir(lock);
+let stage;
+try {
+  const existing = (await readdir(root, { withFileTypes: true }))
+    .filter(entry => entry.isDirectory() && /^v[1-9]\d*$/.test(entry.name))
+    .map(entry => Number(entry.name.slice(1)));
+  if (number !== 1 + Math.max(0, ...existing)) throw new Error('Build the next version in order; existing versions are immutable');
+  const previous = parent ? await readNotes(join(root, parent)) : null;
+  if (parent && !previous) throw new Error(`Poll and lock ${parent}'s feedback before building ${version}`);
+  const outcomes = values.outcomes ? JSON.parse(await readFile(resolve(values.outcomes), 'utf8')) : {};
+  if (!outcomes || Array.isArray(outcomes) || typeof outcomes !== 'object' ||
+      Object.entries(outcomes).some(([id, note]) => !previous?.notes.some(n => n.id === id) ||
+        typeof note !== 'string' || !note.trim())) {
+    throw new Error('Outcomes must map previous note IDs to non-empty explanations');
+  }
+  const resolutions = Object.fromEntries(Object.entries(outcomes).map(([id, note]) => [id, { version, note }]));
+  const record = { version, parent, note: values.note, resolutions };
+  const inline = code => `<script>${code.replace(/<\/script/gi, '<\\/script')}</script>`;
+  const classic = code => code.replace(/^import .*;\n/gm, '').replace(/^export /gm, '');
+  const liveComposition = composition.replace('<script src="gsap.min.js"></script>', () => inline(gsapBanner + gsap))
+    .replace('</body>', () => `${inline(runtimeBanner + runtime)}${inline(classic(regions) + '\n' + bridge)}</body>`);
+  const browserAssets = Object.fromEntries(Object.entries(assets).map(([id, { source, ...asset }]) => [id, asset]));
+  const config = JSON.stringify({ version, liveComposition, edl, assets: browserAssets, transcripts, record,
+    previousNotes: previous?.notes.map(({ id, text }) => ({ id, text })) ?? [] }).replace(/</g, '\\u003c');
+  const code = [regions, edlCode, transcriptCode, spokenCode, feedbackCode, review].map(classic).join('\n');
+  const page = template.replace('<!-- REVIEW_SCRIPT -->', () => inline(`const config = ${config};\n${code}`));
+
+  stage = await mkdtemp(join(root, '.build-'));
+  const project = join(stage, 'composition');
+  await mkdir(project);
+  await writeFile(join(project, 'index.html'), composition);
+  await writeFile(join(project, 'gsap.min.js'), gsapBanner + gsap);
+  if (Object.keys(assets).length) {
+    await mkdir(join(stage, 'media'));
+    await mkdir(join(project, 'media'));
+    await writeJson(join(stage, 'media', 'manifest.json'), { schema_version: manifest.schema_version, assets });
+    for (const [id, asset] of Object.entries(assets)) {
+      const name = basename(asset.proxy);
+      const snapshot = join(stage, 'media', name);
+      await copyFile(join(dir, name), snapshot, constants.COPYFILE_FICLONE);
+      await copyFile(snapshot, join(project, 'media', name), constants.COPYFILE_FICLONE);
+      if (transcripts[id]) await writeJson(join(stage, 'media', `${id}.transcript.json`), transcripts[id]);
+    }
+  }
+  await writeJson(join(stage, 'version.json'), record);
+  await writeJson(join(stage, 'edl.json'), edl);
+  await projectState(stage, 'notes.js', { notes: null });
+  await projectState(stage, 'next.js', { next: null });
+  await writeFile(join(stage, 'review.html'), page);
+  await rename(stage, folder);
+  if (parent) await projectState(join(root, parent), 'next.js', { next: record });
+  console.log(folder);
+} finally {
+  if (stage) await rm(stage, { recursive: true, force: true });
+  await rm(lock, { recursive: true });
+}
