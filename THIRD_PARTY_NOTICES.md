@@ -6,6 +6,7 @@ FrameJam is MIT licensed, copyright 2026 Moritz Kremb. This project uses revisio
 
 | File here | FrameJam source | Use |
 | --- | --- | --- |
+| `scripts/cut/retakes.mjs` | `playbooks/clean-cut/scripts/find_retakes.py` | Adapted normalized repeat windows to find unused takes of the reviewed dialogue across source transcripts. |
 | `scripts/transcript.mjs` | `src/core/transcript.ts` | Copied parser, paragraph detection and bounded overlap quotes. Removed TypeScript types. |
 | `scripts/feedback-format.mjs` | `src/core/feedback.ts` | Adapted time and position helpers and the feedback Markdown to composition frames, rectangles and Lavish. |
 | `scripts/spoken.mjs` | `src/core/feedback.ts` | Adapted overlap and neighboring speech context to source-time intervals and adjacent sentences. |
@@ -37,3 +38,5 @@ The unmodified runtime from `hyperframes@0.9.69` is inlined in generated review 
 ## Editing workflow references
 
 The edit engine calls the existing FrameJam-derived frame extraction and local Whisper lookup listed above. Its cut table, render checks and operations were written for this project. The review and pacing practices in the edit skill draw on FrameJam's [Clean Cut playbook](https://github.com/moritzkremb/framejam/tree/bc45364aff90ba931d350e931291940fdc6e604c/playbooks/clean-cut), [video-use](https://github.com/browser-use/video-use/tree/43cfc56) (MIT), [take-one](https://github.com/talsiach/take-one/tree/43fd27b) (MIT), and public workflow descriptions in [mrpaidsocial-video-editor-agent](https://github.com/mrpaidsocial/mrpaidsocial-video-editor-agent/tree/81a8eea).
+
+[Auto-Editor’s JSON timeline](https://github.com/WyattBlue/auto-editor) is a schema reference. [OpenTimelineIO](https://github.com/AcademySoftwareFoundation/OpenTimelineIO) is a naming reference. Neither is a dependency.

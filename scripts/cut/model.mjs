@@ -102,6 +102,11 @@ export function sourceFrameAfter(before, after, deleted) {
   return last ? last.output[1] - 1 : undefined;
 }
 
+export function reusesFootage(segments) {
+  const unique = [...byAsset(segments).values()].flat().reduce((sum, range) => sum + length(range), 0);
+  return unique !== segments.reduce((sum, segment) => sum + length(segment.range), 0);
+}
+
 export function validateCut(cut, edl, assets, version) {
   requireSchema(cut, 'cut.json');
   if (cut.version !== version || cut.fps !== edl.fps || !sameFootage(cut.segments, edlSegments(edl))) {
@@ -110,6 +115,5 @@ export function validateCut(cut, edl, assets, version) {
   for (const span of [...cut.segments, ...cut.protected]) checkSpan(span, assets, 'Cut span');
   for (const { anchor } of cut.overlays) checkSpan(anchor, assets, 'Overlay anchor');
   // A source-only edit cannot distinguish occurrences of a duplicated frame.
-  const sourceLength = [...byAsset(cut.segments).values()].flat().reduce((sum, range) => sum + length(range), 0);
-  if (sourceLength !== edl.frame_count) throw new Error('Resolve reused source intervals before editing by source frame');
+  if (reusesFootage(cut.segments)) throw new Error('Resolve reused source intervals before editing by source frame');
 }

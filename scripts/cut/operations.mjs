@@ -1,6 +1,6 @@
 import { checkSpan, elementId, locateAnchor, nextVersion, placed, requireSchema, reviewedSpans,
-  schema, sourceFrameAfter, validateCut } from './model.mjs';
-import { byAsset, difference, intersection, length, overlaps, subtract, union } from './ranges.mjs';
+  reusesFootage, schema, sourceFrameAfter, validateCut } from './model.mjs';
+import { byAsset, difference, intersection, overlaps, subtract, union } from './ranges.mjs';
 import { outcomeMetadata } from '../outcomes.mjs';
 
 const SNAP_RADIUS = 6;
@@ -132,6 +132,103 @@ function overlayOp(op, reviewed, assets) {
     ...(nonempty(op.text) ? { text: op.text } : { template: op.template }) } };
 }
 
+function snappedSpan(span, assets, analysis, label) {
+  checkSpan(span, assets, label);
+  const { asset, range } = span;
+  const snapped = { asset, range: range.map(frame => snapBoundary(frame, assets[asset], analysis[asset])) };
+  checkSpan(snapped, assets, label);
+  return snapped;
+}
+
+function sequenceOp(op, reviewed, cut, assets, analysis) {
+  let target;
+  if (op.op !== 'insert') {
+    target = snappedSpan(op, assets, analysis, op.note);
+    if (op.scope === 'local' && !reviewed.some(span => span.asset === op.asset && overlaps(span.range, op.range))) {
+      throw new Error(`Note ${op.note} does not target the requested source range`);
+    }
+    if (!locateAnchor(cut.segments, target)) throw new Error('Move or replace needs a contiguous reviewed source span');
+  }
+  const addition = op.op === 'move' ? null : snappedSpan(op.op === 'insert' ? op : op.with, assets, analysis, op.note);
+  if (addition) {
+    if (Math.abs(assets[addition.asset].proxy_fps - cut.fps) > 1e-7) {
+      throw new Error(`Ingest ${addition.asset} at the composition frame rate before editing`);
+    }
+    if (cut.segments.some(span => span.asset === addition.asset &&
+      (op.op === 'insert' || overlaps(span.range, addition.range)))) {
+      throw new Error(`${op.op} would reuse source footage; insert requires an asset outside the reviewed cut`);
+    }
+    if (op.authority !== 'explicit' && cut.protected.some(span =>
+      span.asset === addition.asset && overlaps(span.range, addition.range))) {
+      throw new Error('Explicit authority is required to restore protected footage');
+    }
+  }
+  let after;
+  if (op.op !== 'replace') {
+    if (op.after === 'start') after = 'start';
+    else {
+      const { asset, frame } = op.after ?? {};
+      const anchor = { asset, range: [frame, frame + 1] };
+      checkSpan(anchor, assets, 'Sequence destination');
+      if (!locateAnchor(cut.segments, anchor) || (target?.asset === asset && overlaps(target.range, anchor.range))) {
+        throw new Error('Sequence destination needs a reviewed frame outside the moved span');
+      }
+      if (op.op === 'insert' && op.scope === 'local' && !reviewed.some(span =>
+        span.asset === asset && overlaps(span.range, anchor.range))) {
+        throw new Error('Local insert must follow a reviewed frame in the note');
+      }
+      after = { asset, frame };
+    }
+    if (op.op === 'insert' && after === 'start' && op.scope === 'local' && !reviewed.some(span => {
+      const first = cut.segments[0];
+      return first.asset === span.asset && first.range[0] >= span.range[0] && first.range[0] < span.range[1];
+    })) throw new Error('Local insert at the start needs a note covering the first frame');
+  }
+  return { ...(target ? { target } : {}), ...(after ? { after } : {}),
+    ...(addition ? { added: [addition] } : {}),
+    ...(op.op === 'replace' ? { removed: [target], required: [target] } : {}) };
+}
+
+function sequenceEdits(segments, decisions, allocateId, removals) {
+  function splitAt(frame) {
+    const timeline = placed(segments);
+    const i = timeline.findIndex(segment => segment.output[0] <= frame && frame < segment.output[1]);
+    if (i === -1) return segments.length;
+    const { output, ...segment } = timeline[i];
+    if (output[0] === frame) return i;
+    const boundary = segment.range[0] + frame - output[0];
+    segments.splice(i, 1, { ...segment, range: [segment.range[0], boundary] },
+      { ...segment, range: [boundary, segment.range[1]], clip: allocateId(segment.clip, boundary) });
+    return i + 1;
+  }
+  for (const item of decisions.filter(item => ['move', 'insert', 'replace'].includes(item.op))) {
+    let moved, position;
+    if (item.target) {
+      const output = locateAnchor(segments, item.target);
+      if (!output) throw new Error('Sequence operations conflict on the same source span');
+      position = splitAt(output[0]);
+      const end = splitAt(output[1]);
+      moved = segments.splice(position, end - position);
+    }
+    if (item.after === 'start') position = 0;
+    else if (item.after) {
+      const { asset, frame } = item.after;
+      const range = [frame, frame + 1];
+      const output = locateAnchor(segments, { asset, range });
+      if (!output || (removals.get(asset) ?? []).some(span => overlaps(span, range))) {
+        throw new Error('The sequence destination frame was removed by another edit');
+      }
+      position = splitAt(output[1]);
+    }
+    const [span] = item.added ?? [];
+    if (span && segments.some(existing => existing.asset === span.asset && overlaps(existing.range, span.range))) {
+      throw new Error('Sequence operations would reuse source footage');
+    }
+    segments.splice(position, 0, ...(span ? [{ ...span, clip: allocateId(`shot-${span.asset}`, span.range[0]) }] : moved));
+  }
+  return segments;
+}
+
 function makeDecisions(cut, edl, notes, ops, assets, analysis) {
   const notesById = new Map(notes.map(note => [note.id, note]));
   return ops.map(op => {
@@ -143,6 +240,9 @@ function makeDecisions(cut, edl, notes, ops, assets, analysis) {
       case 'delete': details = deleteOp(op, note, reviewed, assets, analysis); break;
       case 'trim': details = trimOp(op, reviewed, cut, assets, analysis); break;
       case 'tighten': details = tightenOp(op, reviewed, cut, assets, analysis); break;
+      case 'move':
+      case 'insert':
+      case 'replace': details = sequenceOp(op, reviewed, cut, assets, analysis); break;
       case 'overlay': details = overlayOp(op, reviewed, assets); break;
       case 'ask':
       case 'decline':
@@ -186,9 +286,11 @@ function outcomesFor(notes, decisions, before, cut, anchorLosses, metadata = {})
           messages.push(`Anchor lost for #${item.overlay.element}.`);
         }
       }
-      for (const span of item.added ?? []) {
-        const range = locateAnchor(cut.segments, span);
-        if (range) frames.push(range);
+      for (const span of item.op === 'move' ? [item.target] : item.added ?? []) {
+        frames.push(...placed(cut.segments).flatMap(segment => {
+          const hit = segment.asset === span.asset && intersection(segment.range, span.range);
+          return hit ? [hit.map(frame => frame + segment.output[0] - segment.range[0])] : [];
+        }));
       }
       for (const span of effective) {
         const start = sourceFrameAfter(before.segments, cut.segments, span);
@@ -215,16 +317,21 @@ export function applyOperations(cut, edl, notes, input, assets, analysis) {
   const trims = new Map(decisions.filter(item => item.trim).map(item => [item.trim.clip, item.trim.range]));
   if (trims.size !== decisions.filter(item => item.trim).length) throw new Error('Combine multiple trims of the same clip');
   const existingIds = new Set(cut.segments.map(segment => segment.clip));
-  const segments = cut.segments.flatMap(({ asset, range, clip }) =>
-    subtract(trims.get(clip) ?? range, removals.get(asset) ?? []).map((range, i) => {
-      let id = clip;
-      if (i) {
-        id = `${clip}--f${range[0]}`;
-        while (existingIds.has(id)) id += '-';
-        existingIds.add(id);
-      }
-      return { asset, range, clip: id };
-    }));
+  function allocateId(clip, frame) {
+    let id = `${clip}--f${frame}`;
+    while (existingIds.has(id)) id += '-';
+    existingIds.add(id);
+    return id;
+  }
+  const trimmed = cut.segments.map(segment => ({ ...segment, range: trims.get(segment.clip) ?? segment.range }));
+  const segments = sequenceEdits(trimmed, decisions, allocateId, removals).flatMap(({ asset, range, clip }) =>
+    subtract(range, removals.get(asset) ?? []).map((range, i) => ({
+      asset, range, clip: i ? allocateId(clip, range[0]) : clip,
+    })));
+  if (decisions.some(item => item.target &&
+      item.op === 'move' && !segments.some(segment => segment.asset === item.target.asset &&
+        overlaps(segment.range, item.target.range)))) throw new Error('Another edit removes all moved footage');
+  if (reusesFootage(segments)) throw new Error('The edits would reuse source footage');
   if (!segments.length) throw new Error('The operations remove all footage');
   const byElement = new Map(cut.overlays.map(overlay => [overlay.element, overlay]));
   const anchorsEdited = new Set();
@@ -243,8 +350,7 @@ export function applyOperations(cut, edl, notes, input, assets, analysis) {
   }));
   const removed = difference(cut.segments, segments);
   const added = difference(segments, cut.segments);
-  const protectedSpans = [...byAsset([...cut.protected, ...removed])].flatMap(([asset, ranges]) =>
-    ranges.map(range => ({ asset, range })));
+  const protectedSpans = difference([...cut.protected, ...removed], added);
   const version = nextVersion(input.from);
   const next = { schema_version: schema, version, fps: cut.fps, segments, overlays, protected: protectedSpans };
   const timeline = placed(segments);

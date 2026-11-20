@@ -21,7 +21,7 @@ async function render(project, output, [start, end], { fps, frame_count }, rate)
     '--frames-cache-dir', 'off', '--fps', rate, ...args], { env });
 }
 
-async function renderSourceAudio(edl, window, assets, media, output) {
+async function renderSourceAudio(edl, window, assets, mediaFor, output) {
   const args = [];
   const filters = [];
   const segments = placed(edlSegments(edl));
@@ -31,7 +31,7 @@ async function renderSourceAudio(edl, window, assets, media, output) {
     const i = filters.length;
     const start = (range[0] + portion[0] - timeline[0]) / edl.fps;
     const time = length(portion) / edl.fps;
-    if (assets[asset].audio) args.push('-ss', String(start), '-t', String(time), '-i', join(media, `${asset}.mp4`));
+    if (assets[asset].audio) args.push('-ss', String(start), '-t', String(time), '-i', join(mediaFor(asset), `${asset}.mp4`));
     else args.push('-f', 'lavfi', '-t', String(time), '-i', 'anullsrc=r=16000:cl=mono');
     const samples = Math.round(time * 16000);
     filters.push(`[${i}:a]aformat=sample_rates=16000:channel_layouts=mono,asetpts=PTS-STARTPTS,apad,atrim=end_sample=${samples}[a${i}]`);
@@ -41,7 +41,7 @@ async function renderSourceAudio(edl, window, assets, media, output) {
     '-map', '[out]', '-c:a', 'pcm_s16le', output]);
 }
 
-async function checkSpeech({ input, audio, meta, file, edl, assets, media, temp, window, full }) {
+async function checkSpeech({ input, audio, meta, file, edl, assets, media, mediaFor, temp, window, full }) {
   const assetHasAudio = edl.segments.some(segment => assets[segment.asset].audio);
   const language = input.language ?? 'zh';
   const wav = join(temp, 'read.wav');
@@ -52,7 +52,7 @@ async function checkSpeech({ input, audio, meta, file, edl, assets, media, temp,
   }
   if (!full && assetHasAudio) {
     const reference = join(temp, 'reference.wav');
-    await renderSourceAudio(edl, window, assets, media, reference);
+    await renderSourceAudio(edl, window, assets, mediaFor, reference);
     expected = await transcribe(reference, wav, media, language);
   }
   const hasAudibleSignal = meta.audio && !audio.quiet.some(([a, b]) =>
@@ -84,7 +84,7 @@ async function checkOverlay(file, reference, overlay, window) {
     ...(passed ? {} : { code: 'overlay-pixels-missing' }) };
 }
 
-export async function verifyRenders({ dir, html, edl, assets, media, edit, input, mode }) {
+export async function verifyRenders({ dir, html, edl, assets, media, mediaFor = () => media, edit, input, mode }) {
   const fps = edl.fps;
   const windows = renderPlan(edl.frame_count, fps, edit.changed_frames,
     edit.overlays.map(item => item.output), mode);
@@ -97,7 +97,7 @@ export async function verifyRenders({ dir, html, edl, assets, media, edit, input
   }
   // HyperFrames accepts rational rates on the CLI. A decimal data-fps such
   // as 29.970029... otherwise falls back to 30 when the rate is implicit.
-  const rate = await videoRate(join(media, `${edl.segments[0].asset}.mp4`));
+  const rate = await videoRate(join(mediaFor(edl.segments[0].asset), `${edl.segments[0].asset}.mp4`));
   const temp = await mkdtemp(join(dir, '.render-'));
   const outputDir = join(dir, mode === 'windows' && !full ? 'windows' : 'render');
   await mkdir(outputDir, { recursive: true, mode: 0o700 });
@@ -112,7 +112,7 @@ export async function verifyRenders({ dir, html, edl, assets, media, edit, input
     const gsap = require.resolve('gsap/dist/gsap.min.js');
     await copyFile(gsap, join(project, 'gsap.min.js'));
     for (const asset of new Set(edl.segments.map(segment => segment.asset))) {
-      await copyFile(join(media, `${asset}.mp4`), join(project, 'media', `${asset}.mp4`));
+      await copyFile(join(mediaFor(asset), `${asset}.mp4`), join(project, 'media', `${asset}.mp4`));
     }
     for (const window of windows) {
       const name = full ? 'film' : `f${window[0]}-f${window[1]}`;
@@ -155,7 +155,7 @@ export async function verifyRenders({ dir, html, edl, assets, media, edit, input
           await extractFrame(file, local + offset, join(outputDir, `splice-${frame + offset}.jpg`));
         }
       }
-      const speech = await checkSpeech({ input, audio, meta, file, edl, assets, media, temp, window, full });
+      const speech = await checkSpeech({ input, audio, meta, file, edl, assets, media, mediaFor, temp, window, full });
       evidence.checks.push(speech);
       if (!speech.passed) errors.push({ ...speech, window });
       for (const overlay of edit.overlays.filter(item => intersection(window, item.output))) {

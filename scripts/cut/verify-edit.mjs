@@ -1,5 +1,5 @@
 import { attribute, frameTiming, parseComposition } from '../composition.mjs';
-import { edlSegments, locateAnchor, placed, sameFootage } from './model.mjs';
+import { edlSegments, locateAnchor, placed, reusesFootage, sameFootage } from './model.mjs';
 import { inSilence } from './operations.mjs';
 import { byAsset, difference, intersection, length } from './ranges.mjs';
 
@@ -39,6 +39,7 @@ function verifyConform(base, actual, cut, operations) {
   const authorizedRemoved = operations.flatMap(item => item.removed ?? []);
   const authorizedAdded = operations.flatMap(item => item.added ?? []);
   const errors = [];
+  if (reusesFootage(after)) errors.push({ check: 'C1', code: 'reused-source-footage' });
   const unexpected_removed = difference(removed, authorizedRemoved);
   const unexpected_added = difference(added, authorizedAdded);
   const missing_edits = difference(difference(before, cut.segments), removed);

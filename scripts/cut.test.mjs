@@ -146,3 +146,74 @@ test('tightening counts pauses remaining after the explicit deletion', () => {
   const result = applyOperations(cut, base, notes, input, assets, measured);
   assert.match(result.changes.outcomes.N4.note, /Tightened 3 pause/);
 });
+
+const sequenceAssets = { ...assets, take: { ...asset, proxy: 'media/take.mp4', audio: false } };
+const sequenceAnalysis = { ...analysis, take: { visual_cuts: [], silences: [[0, 638]] } };
+const sequenceInput = (...ops) => ({ schema_version: 1, from: 'v1', ops });
+const sequence = result => result.cut.segments.map(({ asset, range }) => [asset, range]);
+
+test('move snaps the source and relocates it before a later deletion', () => {
+  const result = applyOperations(cut, base, notes, sequenceInput(
+    op('N1', 'move', { asset: 'cut', range: [135, 292], after: { asset: 'cut', frame: 429 } }),
+    op('N3', 'delete', { asset: 'cut', range: [580, 638] }),
+  ), assets, analysis);
+  assert.deepEqual(sequence(result), [['cut', [0, 132]], ['cut', [292, 430]], ['cut', [132, 292]], ['cut', [430, 580]]]);
+  assert.deepEqual(result.changes.outcomes.N1.frames, [[270, 430]]);
+  assert.deepEqual(result.changes.removed, [{ asset: 'cut', range: [580, 638] }]);
+  const generated = alignComposition(html, result.cut, assets);
+  assert.deepEqual(inspectEdit({ base, actual: compositionEdl(generated, assets), html: generated,
+    ...result, analysis, assets }).errors, []);
+  const wrongOrder = generated.replace('data-start-frame="132"', 'data-start-frame="292"')
+    .replace('data-start-frame="270"', 'data-start-frame="132"');
+  assert.ok(inspectEdit({ base, actual: compositionEdl(wrongOrder, assets), html: wrongOrder,
+    ...result, analysis, assets }).errors.some(error => error.code === 'conform-mismatch'));
+});
+
+test('insert gives unused footage a managed clip and a start-of-film link', () => {
+  const result = applyOperations(cut, base, notes, sequenceInput(
+    op('N4', 'insert', { asset: 'take', range: [20, 80], after: 'start' }),
+  ), sequenceAssets, sequenceAnalysis);
+  assert.deepEqual(sequence(result), [['take', [20, 80]], ['cut', [0, 638]]]);
+  assert.deepEqual(result.changes.outcomes.N4.frames, [[0, 60]]);
+  const generated = alignComposition(html, result.cut, sequenceAssets);
+  assert.match(generated, /<video [^>]*muted=""[^>]*src="media\/take\.mp4"/);
+  assert.equal(compositionEdl(generated, sequenceAssets).segments[1].start_frame, 60);
+});
+
+test('replace swaps in another take and tightening still removes pauses on reviewed footage', () => {
+  const result = applyOperations(cut, base, notes, sequenceInput(
+    op('N1', 'replace', { asset: 'cut', range: [135, 292], with: { asset: 'take', range: [20, 80] } }),
+    op('N4', 'tighten', { scope: 'global', authority: 'taste', min_pause: 0.75, keep_pad: 0.15 }),
+  ), sequenceAssets, sequenceAnalysis);
+  assert.deepEqual(sequence(result), [['cut', [0, 118]], ['take', [20, 80]], ['cut', [297, 417]],
+    ['cut', [435, 566]], ['cut', [583, 638]]]);
+  assert.ok(result.changes.outcomes.N1.frames.some(([start]) => start === 118));
+});
+
+test('sequence operations reject reused footage and require explicit authority to restore protected frames', () => {
+  assert.throws(() => applyOperations(cut, base, notes, sequenceInput(
+    op('N1', 'replace', { asset: 'cut', range: [135, 292], with: { asset: 'cut', range: [430, 580] } }),
+  ), assets, analysis), /reuse/i);
+  const protectedCut = { ...cut, protected: [{ asset: 'take', range: [0, 100] }] };
+  const insert = op('N4', 'insert', { asset: 'take', range: [20, 80], after: 'start' });
+  assert.throws(() => applyOperations(protectedCut, base, notes, sequenceInput(
+    { ...insert, authority: 'inferred' },
+  ), sequenceAssets, sequenceAnalysis), /explicit.*protected/i);
+  const result = applyOperations(protectedCut, base, notes, sequenceInput(insert), sequenceAssets, sequenceAnalysis);
+  assert.deepEqual(result.cut.protected, [{ asset: 'take', range: [0, 20] }, { asset: 'take', range: [80, 100] }]);
+});
+
+test('replacement candidates find unused repeated dialogue across assets on the source axis', async () => {
+  const { replacementCandidates } = await import('./cut/retakes.mjs');
+  const speech = (start, text) => ({ words: text.split(' ').map((text, i) => ({
+    text, start: start + i / 3, end: start + (i + 1) / 3,
+  })) });
+  const measured = {
+    cut: { visual_cuts: [], silences: [[132, 135], [165, 172]], speech: speech(4.5, 'Fold it twice.') },
+    take: { visual_cuts: [], silences: [[60, 66], [95, 100]], speech: speech(2.2, 'fold it twice') },
+  };
+  const candidates = replacementCandidates([{ asset: 'cut', range: [135, 165] }], base, sequenceAssets, measured);
+  assert.deepEqual(candidates.map(({ target, with: alternate }) => [target, alternate]), [
+    [{ asset: 'cut', range: [135, 165] }, { asset: 'take', range: [66, 96] }],
+  ]);
+});

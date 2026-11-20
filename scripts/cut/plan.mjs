@@ -4,8 +4,9 @@ import { writeJson } from '../manifest.mjs';
 import { extractFrame, waveform } from './media.mjs';
 import { reviewedSpans, schema } from './model.mjs';
 import { snapBoundary } from './operations.mjs';
+import { replacementCandidates } from './retakes.mjs';
 
-export async function makePlan({ workspace, media, version, edl, notes, assets, analysis, brief, batch, learningPlan }) {
+export async function makePlan({ workspace, media, version, edl, notes, assets, analysis, brief, batch, learningPlan, mediaFor = () => media }) {
   const dir = join(workspace, 'cut-plans', version);
   const evidence = join(dir, 'evidence');
   await mkdir(evidence, { recursive: true, mode: 0o700 });
@@ -23,7 +24,7 @@ export async function makePlan({ workspace, media, version, edl, notes, assets, 
     const files = [];
     if (!note.whole_video) {
       for (const [j, { asset, range }] of spans.entries()) {
-        const source = join(media, `${asset}.mp4`);
+        const source = join(mediaFor(asset), `${asset}.mp4`);
         const half = Math.round(edl.fps / 2);
         const start = Math.max(0, range[0] - half);
         const end = Math.min(assets[asset].frame_count, range[1] + half);
@@ -40,7 +41,8 @@ export async function makePlan({ workspace, media, version, edl, notes, assets, 
       }
     }
     const { id, text, kind, spoken, spoken_around, rect } = note;
-    entries.push({ id, text, kind, spoken, spoken_around, rect, source: spans, evidence: files });
+    entries.push({ id, text, kind, spoken, spoken_around, rect, source: spans, evidence: files,
+      ...(!note.whole_video ? { replace_candidates: replacementCandidates(spans, edl, assets, analysis) } : {}) });
   }
   const file = join(dir, 'ops.draft.json');
   const languages = [...new Set(Object.values(analysis).map(item => item.speech?.language).filter(Boolean))];

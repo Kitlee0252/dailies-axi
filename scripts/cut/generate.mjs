@@ -24,6 +24,12 @@ function regionMatches(html, start, end) {
   }
 }
 
+const insertedTemplate = { attrs: [
+  { name: 'class', value: 'clip' }, { name: 'data-track-index', value: '0' },
+  { name: 'playsinline', value: '' }, { name: 'preload', value: 'auto' },
+  { name: 'style', value: 'position:absolute;inset:0;width:100%;height:100%;object-fit:contain' },
+] };
+
 function serializeVideo(node, segment, assets) {
   const { clip, asset, range, output } = segment;
   const attrs = Object.fromEntries(node.attrs.filter(attr => !managedVideo.test(attr.name))
@@ -77,8 +83,11 @@ export function alignComposition(html, cut, assets) {
   const templates = videos.map(templateFor).sort((a, b) => b.id.length - a.id.length);
   for (const segment of segments) {
     const template = templates.find(({ id }) => segment.clip === id || segment.clip.startsWith(`${id}--f`));
-    if (!template) throw new Error(`Missing video template for ${segment.clip}`);
-    template.slot.rendered.push(serializeVideo(template.node, segment, assets));
+    if (template) template.slot.rendered.push(serializeVideo(template.node, segment, assets));
+    else if (segment.clip.startsWith(`shot-${segment.asset}--f`)) {
+      if (nodes.some(node => attribute(node, 'id') === segment.clip)) throw new Error(`New footage ID conflicts with authored #${segment.clip}`);
+      templates[0].slot.rendered.push(serializeVideo(insertedTemplate, segment, assets));
+    } else throw new Error(`Missing video template for ${segment.clip}`);
   }
   const authoredIds = new Set(nodes.filter(node => attribute(node, 'data-dailies-cut-overlay') === undefined)
     .map(node => attribute(node, 'id')));

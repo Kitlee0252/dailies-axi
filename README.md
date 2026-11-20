@@ -155,7 +155,7 @@ dailies-axi open source/index.html --note "Tightened the review cut" \
   --outcomes cut-candidates/balanced/changes.json
 ```
 
-`analyze [asset]` measures color cuts and quiet intervals with FFmpeg. It caches by proxy hash. `plan` matches the locked note batch to the reviewed EDL and gives you source intervals, candidate cut points, frames, and waveforms. Read and listen to the evidence before choosing an operation. Use `--review-root DIR` on `plan` and `apply` if the workspace uses a custom review output directory.
+`analyze [asset]` measures color cuts and quiet intervals with FFmpeg. It caches by proxy hash. `plan` matches the locked note batch to the reviewed EDL and gives you source intervals, candidate cut points, frames, and waveforms. Check the transcript-based `replace_candidates` against the actual takes before choosing one. Read and listen to the evidence before choosing an operation. Use `--review-root DIR` on `plan` and `apply` if the workspace uses a custom review output directory.
 
 The edit contracts carry `schema_version: 1`. All intervals are zero-based and half-open. In `cut.json` and `ops.json`, the canonical source coordinate is the ingested asset's frame on its conformed proxy. For variable-frame-rate originals, the manifest maps those frames back to decoded source indexes and presentation timestamps. Composition frames are derived from the ordered source ranges. The engine supports contiguous 1× footage with one active source segment at a time and no reused source interval.
 
@@ -163,13 +163,16 @@ The edit contracts carry `schema_version: 1`. All intervals are zero-based and h
 | --- | --- |
 | `delete` | `asset`, `range: [start, end]`. An explicit local range delete covers the locked selection. |
 | `trim` | `clip`, `asset`, `range: [newIn, newOut]`. An extension must use footage outside the current cut and earlier removals. |
+| `move` | Reviewed `asset`, `range: [start, end]`, and `after: "start"` or `after: {asset, frame}` (inclusive source frame to keep before the moved footage). |
+| `insert` | Ingested `asset` outside the reviewed cut, `range`, and `after` as for move. A local note covers the destination. |
+| `replace` | Reviewed `asset` and `range`, plus `with: {asset, range}` of an unused take. |
 | `tighten` | `min_pause` and `keep_pad` in seconds. Use global scope for an authorized whole-film pacing pass. For a local note, an optional `asset` and `range` can narrow the treatment. |
 | `overlay` | Unique `element`, `text` or an authored HTML `template` ID, `anchor: {asset, range}`, and normalized `rect: {x, y, width, height}` relative to the composition. Use `replace: true` with explicit authority to re-anchor an existing overlay. |
 | `ask`, `decline` | `reason`. The outcome stays pending. |
 
 Choose `explicit`, `inferred`, or `taste` for authority and `local` or `global` for scope. Keep the draft's `from` version and `batch` ID. If a localized note authorizes global work, record why in `scope_reason`. In a full render with audio, use `language` and set `expected_speech` to the checked dialogue after editing, or to an empty string for a film without dialogue. Verification compares a fresh local transcription after normalizing case, spacing, and punctuation. Check script variants such as written numbers against the dialogue.
 
-The engine plans every operation on the reviewed source axis before updating the cut. For a deletion or trim it prefers a quiet visual cut within six frames, then the existing quiet position or a nearby quiet boundary. It reports a boundary with no safe cut and keeps a lost overlay anchor visible in the report. `select` installs the cumulative `cut.json` and regenerates the managed portions of `source/index.html`. Author-controlled graphics and animation stay in the surrounding HTML. A `template` for an overlay can live outside the managed sections within the composition root.
+The engine plans every operation on the reviewed source axis before updating the cut. For a deletion or trim it prefers a quiet visual cut within six frames, then the existing quiet position or a nearby quiet boundary. Move, insert, and replace use the same snapping for span bounds. Destination frames are exact and must survive the batch. Sequence operations execute in listed order, then deletes and tightening remove source frames. Ingest extra takes at the composition rate in the review’s media directory. The engine freezes their proxy hashes with the candidate. Restoring protected footage through insert or replace requires explicit authority. It reports a boundary with no safe cut and keeps a lost overlay anchor visible in the report. `select` installs the cumulative `cut.json` and regenerates the managed portions of `source/index.html`. Author-controlled graphics and animation stay in the surrounding HTML. A `template` for an overlay can live outside the managed sections within the composition root.
 
 For a taste note, apply two or more named candidates from the same locked batch. Keep explicit changes identical and vary the treatment. Verify each candidate, then compare its private `render/film.mp4` and `changes.json` before selection. Candidates are separate and only the chosen one advances the review version.
 

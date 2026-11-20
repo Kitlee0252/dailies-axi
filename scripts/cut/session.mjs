@@ -6,10 +6,10 @@ import { compositionEdl } from '../composition-edl.mjs';
 import { readManifest, sha256, writeJson } from '../manifest.mjs';
 import { compositionPath, latestVersion } from '../workspace.mjs';
 import { supportedNotes } from '../notes.mjs';
-import { analyzeAssets } from './analyze.mjs';
+import { analyzeAsset } from './analyze.mjs';
 import { readJson, readOptional, withLock, writeText } from './files.mjs';
 import { alignComposition } from './generate.mjs';
-import { cutFromEdl, edlSegments, nextVersion, requireSchema, reviewedSpans, sameFootage, schema } from './model.mjs';
+import { assetId, cutFromEdl, edlSegments, nextVersion, requireSchema, reviewedSpans, sameFootage, schema } from './model.mjs';
 import { applyOperations } from './operations.mjs';
 import { makePlan } from './plan.mjs';
 import { inspectEdit } from './verify-edit.mjs';
@@ -26,7 +26,7 @@ function candidatePath(workspace, name) {
   return join(workspace, 'cut-candidates', name);
 }
 
-async function lockedRound(workspace, reviewRoot, version) {
+async function lockedRound(workspace, reviewRoot, version, supplementalIds = []) {
   nextVersion(version);
   const folder = join(reviewRoot, version);
   const media = join(folder, 'media');
@@ -43,23 +43,33 @@ async function lockedRound(workspace, reviewRoot, version) {
   if (!supportedNotes(record) || record.version !== version || reviewed.version !== version || !record.batch?.id || !Array.isArray(record.notes)) {
     throw new Error('Plan against a locked review batch');
   }
-  const { assets } = manifest;
+  const workspaceMedia = reviewed.transcript_media ?? join(workspace, 'media');
+  const catalog = await readManifest(workspaceMedia);
+  const ids = supplementalIds === 'all' ? Object.keys(catalog.assets) : [...new Set(supplementalIds)];
+  const supplemental = Object.fromEntries(ids.filter(id => typeof id === 'string' && assetId.test(id) && !Object.hasOwn(manifest.assets, id) &&
+    Object.hasOwn(catalog.assets, id) && Math.abs(catalog.assets[id].proxy_fps - edl.fps) <= 1e-7)
+    .map(id => [id, catalog.assets[id]]));
+  const assets = { ...supplemental, ...manifest.assets };
+  const mediaFor = id => Object.hasOwn(manifest.assets, id) ? media : workspaceMedia;
   const cache = join(workspace, 'media');
   await mkdir(cache, { recursive: true, mode: 0o700 });
-  const analysis = await analyzeAssets(media, assets, cache);
+  const analysis = {};
+  for (const [id, info] of Object.entries(assets)) analysis[id] = await analyzeAsset(mediaFor(id), id, info, cache);
+
   const generated = (learningPlan?.generated_notes ?? []).map(note => ({ ...note, generated: true }));
-  return { workspace, reviewRoot, version, edl, media, brief: brief.trim(), reviewed,
+  return { workspace, reviewRoot, version, edl, media, mediaFor, workspaceMedia, supplemental, brief: brief.trim(), reviewed,
     assets, analysis, notes: [...record.notes, ...generated], learningPlan, batch: record.batch.id, notesHash, edlHash };
 }
 
 function frozenInputs(round) {
   return { from: round.version, review_root: round.reviewRoot,
     notes_sha256: round.notesHash, edl_sha256: round.edlHash,
+    ...(Object.keys(round.supplemental).length ? { supplemental_assets: round.supplemental } : {}),
     proxy_sha256: Object.fromEntries(Object.entries(round.analysis).map(([id, data]) => [id, data.proxy_sha256])) };
 }
 
 export async function plan(workspace, reviewRoot, version) {
-  const round = await lockedRound(workspace, reviewRoot, version);
+  const round = await lockedRound(workspace, reviewRoot, version, 'all');
   return makePlan(round);
 }
 
@@ -113,6 +123,15 @@ async function currentCut(round) {
   return cut ?? cutFromEdl(round.edl, round.version);
 }
 
+function requestedAssets(input, cut) {
+  return [
+    ...(Array.isArray(input.ops) ? input.ops.flatMap(op => op?.op === 'insert' ? [op.asset] :
+      op?.op === 'replace' ? [op.with?.asset] : []) : []),
+    ...(cut?.protected ?? []).map(span => span.asset),
+    ...(cut?.overlays ?? []).map(item => item.anchor.asset),
+  ].filter(id => typeof id === 'string');
+}
+
 export async function apply(workspace, reviewRoot, file, name) {
   const input = await readJson(file);
   requireSchema(input, 'ops.json');
@@ -120,7 +139,9 @@ export async function apply(workspace, reviewRoot, file, name) {
   const candidate = name ?? version;
   const dir = candidatePath(workspace, candidate);
   if (await present(dir)) throw new Error(`Candidate ${candidate} already exists; choose a new name`);
-  const { notes, edl, assets, analysis, ...context } = await lockedRound(workspace, reviewRoot, input.from);
+  const workingCut = await readOptional(join(workspace, 'cut.json'));
+  const { notes, edl, assets, analysis, ...context } = await lockedRound(workspace, reviewRoot, input.from,
+    requestedAssets(input, workingCut));
   if (Number(input.from.slice(1)) !== await latestVersion(reviewRoot)) throw new Error('Apply against the latest locked review');
   if (input.batch !== context.batch) throw new Error('ops.json batch must match the locked review (start with dailies-cut plan)');
   const base = await currentCut({ ...context, edl });
@@ -161,7 +182,10 @@ async function readCandidate(workspace, name) {
   const [context, input, cut, changes] = await Promise.all(
     ['base', 'ops', 'cut', 'changes'].map(file => readJson(join(dir, `${file}.json`))));
   requireSchema(context, 'candidate base');
-  const round = await lockedRound(workspace, resolve(context.review_root), context.from);
+  const round = await lockedRound(workspace, resolve(context.review_root), context.from, requestedAssets(input, context.cut));
+  if (!isDeepStrictEqual(context.supplemental_assets, frozenInputs(round).supplemental_assets)) {
+    throw new Error('Supplemental asset metadata changed after applying the operation plan');
+  }
   for (const [field, value] of Object.entries(frozenInputs(round))) {
     if (!isDeepStrictEqual(context[field], value)) throw new Error(`Locked review input changed: ${field}`);
   }
@@ -202,14 +226,14 @@ export async function verify(workspace, name, { mode, edlOnly, composition } = {
       errors.push(...await inspectLearning(round, input, changes));
       if (!edlOnly && (!errors.length || composition)) {
         render = await verifyRenders({ dir: composition ? await diagnosticDir(dir) : dir, html, edl: actual,
-          assets: round.assets, media: round.media, edit, input, mode });
+          assets: round.assets, media: round.media, mediaFor: round.mediaFor, edit, input, mode });
         errors.push(...render.errors);
       }
       if (!isDeepStrictEqual(hashes, await fileHashes(dir, source))) {
         errors.push({ code: 'candidate-changed', message: 'Candidate files changed during verification' });
       }
       for (const [asset, hash] of Object.entries(context.proxy_sha256)) {
-        if (await sha256(join(round.media, `${asset}.mp4`)) !== hash) {
+        if (await sha256(join(round.mediaFor(asset), `${asset}.mp4`)) !== hash) {
           errors.push({ code: 'proxy-changed', asset });
         }
       }
@@ -256,7 +280,7 @@ export async function select(workspace, name) {
     if (workingHash !== context.source_sha256 && workingHash !== hashes.composition_sha256) {
       throw new Error('The working composition changed after this candidate was generated');
     }
-    const workspaceMedia = join(workspace, 'media');
+    const { workspaceMedia } = round;
     for (const asset of new Set(cut.segments.map(segment => segment.asset))) {
       if (await sha256(join(workspaceMedia, `${asset}.mp4`)) !== context.proxy_sha256[asset]) {
         throw new Error(`Workspace proxy ${asset} differs from the reviewed asset`);
