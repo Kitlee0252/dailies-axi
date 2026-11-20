@@ -53,7 +53,7 @@ dailies-axi transcribe camera --language en
 dailies-axi transcribe camera --srt source/corrected.srt
 ```
 
-Automatic transcription uses local `whisper-cli` or `whisper-cpp` and defaults to Mandarin. Chinese and Japanese are timed per character or token, so transcript lines split at sentence punctuation and range quotes cover only the words inside the range. Whisper's word times can be off by a few tenths of a second, so check cut points against the picture and sound. Set `DAILIES_WHISPER` and `DAILIES_WHISPER_MODEL` to select the executable and a multilingual GGML model. You can also place the model under `~/.cache/hyperframes/whisper/models`. Dailies AXI never downloads a model. Corrected subtitles use original source times and take precedence over the automatic draft. Each build snapshots its transcripts.
+Automatic transcription uses local `whisper-cli` or `whisper-cpp` and defaults to Mandarin. Chinese and Japanese are timed per character or token. Dailies AXI measures audio pauses of at least 0.4 seconds, caches them with the transcript, and uses them to align Whisper's token starts and split cues. Continuous automatic speech also splits into shorter cues. Check cut points against picture and sound because token timings are approximate. Set `DAILIES_WHISPER` and `DAILIES_WHISPER_MODEL` to select the executable and a multilingual GGML model. You can also place the model under `~/.cache/hyperframes/whisper/models`. Dailies AXI never downloads a model. Corrected subtitles use original source times and take precedence over the automatic draft. Each build snapshots its transcripts. Run `dailies-axi transcribe <asset-id>` to align an existing Whisper draft before building the next version.
 
 ## HyperFrames composition quick start
 
@@ -79,6 +79,13 @@ For each video segment, give the element a unique HTML `id` and set `data-review
 Include the normal HyperFrames styles and scripts in your composition. Starting from a standalone HTML file, `open` copies it to `<file-stem>-review/source/index.html`. Use that working copy for later rounds. If you open a workspace’s `source/index.html`, the command uses that workspace directly. It ingests missing originals at the composition’s frame rate, builds the next version, prints the link, and waits for feedback. It reuses existing assets and requires the previous round to be locked. Use `--no-poll` to stop after getting the link. Transcription options apply to newly ingested assets. For a composition with one asset, you can also pass `--srt FILE`.
 
 Use zero-based integer `data-start-frame`, `data-duration-frame`, and `data-media-start-frame` for start, length, and proxy offset. Their seconds counterparts `data-start`, `data-duration`, and `data-media-start` still work. If you provide both forms, they must identify the same frame. The build rejects off-grid seconds and reports the nearest frame. It writes exact timing and proxy references into the snapshot for HyperFrames and leaves the working HTML as authored. The receipt reports the composition frame count and each clip’s frame bounds and proxy offsets. `edl.json` also records the corresponding original source frames.
+
+To render a review composition locally with HyperFrames telemetry disabled, run the following from the workspace.
+
+```sh
+mkdir -p renders
+HYPERFRAMES_NO_TELEMETRY=1 DO_NOT_TRACK=1 hyperframes render review/v1/composition -o renders/v1.mp4
+```
 
 ## Animation quick start
 
@@ -126,7 +133,7 @@ This opens the 24-second Night Signal composition in Lavish. Keep the poll attac
 
 `build` defaults to `source/index.html` and writes to `review/vN/`. If no working composition exists, it uses the bundled animation. Use `--composition FILE` for another edit. If you use a custom media directory, pass the same `--media DIR` to ingest, transcribe, and build. If you pass a custom output directory to `build`, give `review` and `poll` its explicit `review.html` path. Paths resolve from the current directory. The runtime, GSAP and review page assets come from the installation.
 
-The original scripts remain available to developers. See the CLI help for the equivalent commands. Run `npm test` from the checkout.
+The original scripts remain available to developers. See the CLI help for the equivalent commands. Set `DAILIES_DEBUG=1` to include stack traces with CLI errors. Run `npm test` from the checkout.
 
 ## Install the agent skill
 

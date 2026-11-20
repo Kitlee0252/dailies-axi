@@ -220,6 +220,28 @@ export function paragraphStarts(words) {
   return starts;
 }
 
+export function alignWhisperTranscript(transcript, silences) {
+  const breaks = [];
+  let silenceIndex = 0;
+  let lastBreak = -1;
+  const words = transcript.words.map((word, index) => {
+    while (silences[silenceIndex]?.end <= word.start) silenceIndex++;
+    const silence = silences[silenceIndex];
+    if (!silence) return word;
+    // Whisper can begin the next token just before the measured pause.
+    const crossesOnset = word.start >= silence.start - .08 && word.end >= silence.start + .1;
+    if (word.start < silence.start && !crossesOnset) return word;
+    if (silenceIndex !== lastBreak) {
+      breaks.push(index);
+      lastBreak = silenceIndex;
+    }
+    // Keep a token selectable when a range starts exactly at the new onset.
+    return { ...word, start: silence.end, end: Math.max(silence.end + .001, word.end) };
+  });
+  const paragraphs = [...new Set([...paragraphStarts(words), ...breaks])].sort((a, b) => a - b);
+  return { words, paragraphs, silences };
+}
+
 // Dailies AXI addition: Chinese and Japanese timings arrive per character or
 // token, so only words from spaced scripts get a separating space.
 const UNSPACED_END = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\u3000-\u303f\uff00-\uffef]$/u;

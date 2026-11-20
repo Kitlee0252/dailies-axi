@@ -4,6 +4,7 @@ import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { basename, dirname, extname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { decode, encode } from '@toon-format/toon';
+import { buildReview } from './build-review.mjs';
 import { commands, isCompositionFile, parseCommand } from './cli-args.mjs';
 import { compositionSources, parseComposition, relocateComposition } from './composition.mjs';
 import { readManifest } from './manifest.mjs';
@@ -88,7 +89,7 @@ async function build(args, options, file) {
     }
     options = { ...options, composition: contents === undefined ? samplePath : file };
   }
-  await script('./build-review.mjs', [...args, ...flags(options)]);
+  await buildReview([...args, ...flags(options)]);
   const review_file = join(root, version, 'review.html');
   const { fps, frame_count, segments } = JSON.parse(await readFile(join(root, version, 'edl.json'), 'utf8'));
   return { version, review_file, fps, frame_count,
@@ -312,6 +313,7 @@ async function main() {
 try {
   await main();
 } catch (error) {
+  if (process.env.DAILIES_DEBUG === '1') console.error(error.stack);
   console.error(encode({ error: error.message }));
   process.exitCode ||= 1;
 }

@@ -59,6 +59,25 @@ test('unknown commands, flags and surplus arguments are rejected', () => {
 const bin = fileURLToPath(new URL('./cli.mjs', import.meta.url));
 const run = (cwd, ...args) => spawnSync(process.execPath, [bin, ...args], { cwd, encoding: 'utf8' });
 
+test('build reports the invalid timing in one line and exposes its stack in debug mode', async t => {
+  const cwd = await mkdtemp(join(tmpdir(), 'dailies-cli-'));
+  t.after(() => rm(cwd, { recursive: true, force: true }));
+  await writeFile(join(cwd, 'off-grid.html'), `<!doctype html><body>
+    <main data-composition-id="demo" data-fps="30" data-duration-frame="200">
+      <div id="overlay" data-start="6.26"></div>
+    </main></body>`);
+  const args = [bin, 'build', 'v1', '--composition', 'off-grid.html'];
+  const result = spawnSync(process.execPath, args, { cwd, encoding: 'utf8',
+    env: { ...process.env, DAILIES_DEBUG: '0' } });
+  assert.equal(result.status, 1);
+  assert.equal(result.stderr.trim().split('\n').length, 1);
+  assert.match(decode(result.stderr).error, /#overlay data-start.*frame boundary.*nearest is F188/);
+  const debug = spawnSync(process.execPath, args, { cwd, encoding: 'utf8',
+    env: { ...process.env, DAILIES_DEBUG: '1' } });
+  assert.equal(debug.status, 1);
+  assert.match(debug.stderr, /at buildReview/);
+});
+
 test('init creates a workspace in an external directory and preserves existing edits', async t => {
   const cwd = await mkdtemp(join(await realpath(tmpdir()), 'dailies-cli-'));
   t.after(() => rm(cwd, { recursive: true, force: true }));

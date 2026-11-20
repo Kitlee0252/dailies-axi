@@ -70,6 +70,32 @@ test('Chinese point context includes the preceding and following sentences', asy
   assert.equal(spokenAround(transcript, 9), '前句。这句。后句。');
 });
 
+test('Whisper pauses align opening tokens and carry cue breaks into a trimmed edit', async () => {
+  const { alignWhisperTranscript, wordsBetween } = await import('./transcript.mjs');
+  const { playedTranscript, transcriptCues } = await import('./spoken.mjs');
+  const words = [['尾', 1, 2.02], ['杯', 2.02, 2.3], ['身', 2.3, 3.2], ['好', 3.2, 4]].map(
+    ([text, start, end]) => ({ text, start, end }));
+  const silences = [{ start: 2.05, end: 3 }];
+  const automatic = { ...alignWhisperTranscript({ words }, silences), corrected: false };
+  assert.deepEqual(automatic.words.map(word => word.start), [1, 3, 3, 3.2]);
+  assert.deepEqual(automatic.silences, silences);
+  assert.equal(wordsBetween(automatic, 1, 3), '尾');
+  assert.equal(wordsBetween(automatic, 3, 4), '杯身好');
+  const edl = { fps: 1, segments: [{ asset: 'cut', start_frame: 0, end_frame: 3,
+    source_in_seconds: 1, source_out_seconds: 4 }] };
+  assert.deepEqual(transcriptCues(playedTranscript(edl, { cut: automatic })).map(cue => cue.start), [0, 2]);
+});
+
+test('continuous automatic speech gets bounded cues while corrected cues retain their timing', async () => {
+  const { playedTranscript, transcriptCues } = await import('./spoken.mjs');
+  const words = Array.from({ length: 20 }, (_, i) => ({ text: '字', start: i, end: i + 1 }));
+  const edl = { fps: 1, segments: [{ asset: 'cut', start_frame: 0, end_frame: 20,
+    source_in_seconds: 0, source_out_seconds: 20 }] };
+  const starts = transcript => transcriptCues(playedTranscript(edl, { cut: transcript })).map(cue => cue.start);
+  assert.deepEqual(starts({ words, corrected: false }), [0, 6, 12, 18]);
+  assert.deepEqual(starts({ words, corrected: true }), [0]);
+});
+
 test('EDL validates frame alignment and rejects trims outside the original proxy', async () => {
   const { compositionEdl } = await import('./composition-edl.mjs');
   const assets = { camera: { proxy: 'media/camera.mp4', proxy_fps: 2, frame_count: 6,

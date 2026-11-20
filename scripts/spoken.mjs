@@ -5,6 +5,7 @@
 import { joinWords, wordsBetween } from './transcript.mjs';
 
 const AROUND = 1;
+const MAX_AUTOMATIC_CUE_SECONDS = 6;
 
 export function transcriptCues(transcript) {
   if (!transcript?.words.length) return [];
@@ -13,7 +14,8 @@ export function transcriptCues(transcript) {
   let cue;
   for (const [i, word] of transcript.words.entries()) {
     if (!cue || breaks.has(i) || /[.!?…。！？]["'”’）)]*$/.test(cue.words.at(-1)?.text) ||
-        word.start - cue.end > .25) {
+        word.start - cue.end > .25 ||
+        (transcript.corrected === false && word.start - cue.start >= MAX_AUTOMATIC_CUE_SECONDS)) {
       cue = { start: word.start, end: word.end, words: [] };
       cues.push(cue);
     }
@@ -42,10 +44,16 @@ export function playedTranscript(edl, transcripts) {
   const words = [], paragraphs = [];
   for (const segment of edl.segments) {
     const offset = segment.start_frame / edl.fps - segment.source_in_seconds;
-    const kept = (transcripts[segment.asset]?.words ?? []).filter(word =>
+    const transcript = transcripts[segment.asset];
+    const kept = (transcript?.words ?? []).filter(word =>
       word.end > segment.source_in_seconds && word.start < segment.source_out_seconds);
-    if (kept.length) paragraphs.push(words.length);
-    words.push(...kept.map(word => ({ text: word.text, start: word.start + offset, end: word.end + offset })));
+    const starts = transcript?.corrected === false
+      ? new Set(transcriptCues(transcript).map(cue => cue.words[0]))
+      : undefined;
+    for (const [index, word] of kept.entries()) {
+      if (index === 0 || starts?.has(word)) paragraphs.push(words.length);
+      words.push({ text: word.text, start: word.start + offset, end: word.end + offset });
+    }
   }
   return { words, paragraphs };
 }
