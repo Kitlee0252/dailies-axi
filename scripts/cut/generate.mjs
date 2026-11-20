@@ -1,4 +1,5 @@
 import { attribute, parseComposition, proxyPath } from '../composition.mjs';
+import { attributesFor, nativeAudio, reframeRect, reframeStyle, spliceTreatments } from './attributes.mjs';
 import { locateAnchor, placed } from './model.mjs';
 import { length } from './ranges.mjs';
 
@@ -30,13 +31,51 @@ const insertedTemplate = { attrs: [
   { name: 'style', value: 'position:absolute;inset:0;width:100%;height:100%;object-fit:contain' },
 ] };
 
-function serializeVideo(node, segment, assets) {
+const audioKeys = ['data-volume', 'data-fade-in', 'data-fade-out', 'data-has-audio', 'muted'];
+const audioBase = 'data-dailies-cut-audio-base';
+const styleBase = 'data-dailies-cut-style-base';
+
+function serializeVideo(node, segment, assets, cut, composition, splice) {
   const { clip, asset, range, output } = segment;
   const attrs = Object.fromEntries(node.attrs.filter(attr => !managedVideo.test(attr.name))
     .map(({ name, value }) => [name, value]));
+  if (Object.hasOwn(attrs, audioBase)) {
+    const original = JSON.parse(attrs[audioBase]);
+    for (const key of audioKeys) {
+      if (Object.hasOwn(original, key)) attrs[key] = original[key];
+      else delete attrs[key];
+    }
+    delete attrs[audioBase];
+  }
+  if (Object.hasOwn(attrs, styleBase)) {
+    const original = JSON.parse(attrs[styleBase]);
+    if (original === null) delete attrs.style;
+    else attrs.style = original;
+    delete attrs[styleBase];
+  }
   if (!Object.hasOwn(attrs, 'data-has-audio') && !Object.hasOwn(attrs, 'muted')) {
     if (assets[asset].audio) attrs['data-has-audio'] = 'true';
     else attrs.muted = '';
+  }
+  const { audio, reframe } = attributesFor(cut, segment);
+  if (audio || splice) {
+    attrs[audioBase] = JSON.stringify(Object.fromEntries(audioKeys.filter(key => Object.hasOwn(attrs, key))
+      .map(key => [key, attrs[key]])));
+    if (audio) {
+      delete attrs.muted;
+      attrs['data-has-audio'] = 'true';
+      for (const key of audioKeys.slice(0, 3)) delete attrs[key];
+      Object.assign(attrs, nativeAudio(audio, range, cut.fps, splice));
+    } else {
+      for (const [field, seconds] of Object.entries(splice)) {
+        const key = `data-${field.replace('_', '-')}`;
+        attrs[key] = Math.max(Number(attrs[key]) || 0, seconds);
+      }
+    }
+  }
+  if (reframe) {
+    attrs[styleBase] = JSON.stringify(attrs.style ?? null);
+    attrs.style = [attrs.style, reframeStyle(reframeRect(reframe, assets[asset], composition))].filter(Boolean).join(';');
   }
   return '<video ' + Object.entries({ ...attrs, id: clip, src: proxyPath(asset), 'data-review-clip': asset,
     'data-start-frame': output[0], 'data-duration-frame': length(range), 'data-media-start-frame': range[0] })
@@ -63,7 +102,9 @@ function serializeOverlay(overlay, segments, nodes, html) {
 export function alignComposition(html, cut, assets) {
   const { root, videos, fps, nodes } = parseComposition(html, { sourceCodeLocationInfo: true });
   if (fps !== cut.fps) throw new Error('Composition frame rate changed after review');
+  const dimensions = { width: Number(attribute(root, 'data-width')), height: Number(attribute(root, 'data-height')) };
   const segments = placed(cut.segments);
+  const { clips: fades } = spliceTreatments(cut);
   const slots = regionMatches(html, segmentStart, segmentEnd).map(location => ({ location, rendered: [] }));
   const overlays = regionMatches(html, overlayStart, overlayEnd);
   if (overlays.length > 1) throw new Error('Expected a single managed overlay region');
@@ -82,11 +123,12 @@ export function alignComposition(html, cut, assets) {
   }
   const templates = videos.map(templateFor).sort((a, b) => b.id.length - a.id.length);
   for (const segment of segments) {
-    const template = templates.find(({ id }) => segment.clip === id || segment.clip.startsWith(`${id}--f`));
-    if (template) template.slot.rendered.push(serializeVideo(template.node, segment, assets));
+    const template = templates.find(({ id, node }) => attribute(node, 'data-review-clip') === segment.asset &&
+      (segment.clip === id || segment.clip.startsWith(`${id}--f`)));
+    if (template) template.slot.rendered.push(serializeVideo(template.node, segment, assets, cut, dimensions, fades.get(segment.clip)));
     else if (segment.clip.startsWith(`shot-${segment.asset}--f`)) {
       if (nodes.some(node => attribute(node, 'id') === segment.clip)) throw new Error(`New footage ID conflicts with authored #${segment.clip}`);
-      templates[0].slot.rendered.push(serializeVideo(insertedTemplate, segment, assets));
+      templates[0].slot.rendered.push(serializeVideo(insertedTemplate, segment, assets, cut, dimensions, fades.get(segment.clip)));
     } else throw new Error(`Missing video template for ${segment.clip}`);
   }
   const authoredIds = new Set(nodes.filter(node => attribute(node, 'data-dailies-cut-overlay') === undefined)

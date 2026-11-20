@@ -1,4 +1,5 @@
 import { attribute, frameTiming, parseComposition } from '../composition.mjs';
+import { attributesFor, nativeAudio, reframeRect, reframeStyle, spliceTreatments } from './attributes.mjs';
 import { edlSegments, locateAnchor, placed, reusesFootage, sameFootage } from './model.mjs';
 import { inSilence } from './operations.mjs';
 import { byAsset, difference, intersection, length } from './ranges.mjs';
@@ -9,15 +10,19 @@ export const flashRanges = (cuts, frameCount, fps) => {
     end - boundaries[i] < Math.max(2, Math.round(fps * 0.25)) ? [[boundaries[i], end]] : []);
 };
 
-export function footageCuts(edl, analysis) {
-  return placed(edlSegments(edl)).flatMap(({ asset, range: [start, end], output }) =>
-    [output[0], ...analysis[asset].visual_cuts.filter(cut => cut > start && cut < end)
-      .map(cut => output[0] + cut - start)]).filter(Boolean);
+const continuous = (left, right) => left?.asset === right?.asset && left?.range[1] === right?.range[0];
+
+export function footageCuts(edl, analysis, ignoreContinuous = false) {
+  const timeline = placed(edlSegments(edl));
+  return timeline.flatMap(({ asset, range: [start, end], output }, i) =>
+    [...(ignoreContinuous && continuous(timeline[i - 1], timeline[i]) ? [] : [output[0]]),
+      ...analysis[asset].visual_cuts.filter(cut => (cut > start && cut < end) || (ignoreContinuous && cut === start))
+        .map(cut => output[0] + cut - start)]).filter(Boolean);
 }
 
 // Identify genuinely changed boundaries by source neighbors so inherited cuts
 // remain valid even when earlier edits change their output offsets.
-function sourceBoundaries(segments) {
+function sourceBoundaries(segments, ignoreContinuous = false) {
   const timeline = placed(segments);
   const pair = (left, right) => JSON.stringify([left && [left.asset, left.range[1]], right && [right.asset, right.range[0]]]);
   const markers = timeline.map((segment, i) => {
@@ -28,7 +33,7 @@ function sourceBoundaries(segments) {
   });
   const last = timeline.at(-1);
   markers.push({ frame: last.output[1], key: pair(last), sides: [{ asset: last.asset, frame: last.range[1] }] });
-  return markers;
+  return ignoreContinuous ? markers.filter((_, i) => !continuous(timeline[i - 1], timeline[i])) : markers;
 }
 
 function verifyConform(base, actual, cut, operations) {
@@ -89,17 +94,54 @@ function verifyAnchors(html, cut, actual) {
   return { errors, overlays };
 }
 
+function verifyAttributes(html, cut, actual, assets, fades) {
+  const { root, videos } = parseComposition(html);
+  const dimensions = { width: Number(attribute(root, 'data-width')), height: Number(attribute(root, 'data-height')) };
+  const errors = [];
+  const audio = [];
+  const reframes = [];
+  for (const segment of placed(edlSegments(actual))) {
+    const { clip, asset, range, output } = segment;
+    const { audio: gain, reframe } = attributesFor(cut, segment);
+    const node = videos.find(node => attribute(node, 'id') === clip);
+    const report = kind => errors.push({ check: 'attributes', code: 'attribute-mismatch', kind, clip, output });
+    for (const item of [gain, reframe].filter(Boolean)) {
+      if (item.anchor.range[0] > range[0] || item.anchor.range[1] < range[1]) report(item.kind);
+    }
+    const splice = fades.get(clip);
+    if (gain) {
+      const settings = nativeAudio(gain, range, cut.fps, splice);
+      if (attribute(node, 'muted') !== undefined || attribute(node, 'data-has-audio') !== 'true' ||
+          Object.entries(settings).some(([key, value]) => attribute(node, key) !== String(value))) report('audio');
+      audio.push({ asset, range, output, volume: settings['data-volume'],
+        fade_in: settings['data-fade-in'], fade_out: settings['data-fade-out'] });
+    } else if (splice) {
+      for (const [field, seconds] of Object.entries(splice)) {
+        const key = `data-${field.replace('_', '-')}`;
+        if (!(Number(attribute(node, key)) >= seconds)) report('splice-fade');
+      }
+    } else if (attribute(node, 'data-dailies-cut-audio-base') !== undefined) report('audio');
+    if (reframe) {
+      const rect = reframeRect(reframe, assets[asset], dimensions);
+      if (!attribute(node, 'style')?.endsWith(reframeStyle(rect))) report('reframe');
+      reframes.push({ asset, range, output, rect });
+    } else if (attribute(node, 'data-dailies-cut-style-base') !== undefined) report('reframe');
+  }
+  return { errors, audio, reframes };
+}
+
 export function inspectEdit({ base, actual, html, cut, changes, analysis, assets = {} }) {
   const { errors, ...conform } = verifyConform(base, actual, cut, changes.operations);
-  const originalKeys = new Set(sourceBoundaries(edlSegments(base)).map(boundary => boundary.key));
-  const altered = sourceBoundaries(edlSegments(actual)).filter(boundary => !originalKeys.has(boundary.key));
+  const ignoreContinuous = cut.attributes !== undefined;
+  const originalKeys = new Set(sourceBoundaries(edlSegments(base), ignoreContinuous).map(boundary => boundary.key));
+  const altered = sourceBoundaries(edlSegments(actual), ignoreContinuous).filter(boundary => !originalKeys.has(boundary.key));
   for (const boundary of altered) {
     for (const { asset, frame } of boundary.sides) {
       if (frame === 0 || frame === assets[asset]?.frame_count || inSilence(analysis[asset], frame)) continue;
       errors.push({ check: 'C2', code: 'cut-in-speech', output_frame: boundary.frame, asset, frame });
     }
   }
-  const cuts = footageCuts(actual, analysis);
+  const cuts = footageCuts(actual, analysis, ignoreContinuous);
   for (const range of flashRanges(cuts, actual.frame_count, actual.fps)) {
     errors.push({ check: 'C3', code: 'flash-shot', range });
   }
@@ -109,5 +151,16 @@ export function inspectEdit({ base, actual, html, cut, changes, analysis, assets
   }
   const { errors: anchorErrors, overlays } = verifyAnchors(html, cut, actual);
   errors.push(...anchorErrors);
-  return { errors, conform, cuts, changed_frames: altered.map(boundary => boundary.frame), overlays };
+  const { clips, joins } = spliceTreatments(cut);
+  const { errors: attributeErrors, audio, reframes } = verifyAttributes(html, cut, actual, assets, clips);
+  const changed_frames = altered.map(boundary => boundary.frame);
+  const hasSequence = changes.operations.some(item => ['move', 'insert', 'replace'].includes(item.op));
+  const oldClips = sourceBoundaries(edlSegments(base));
+  const oldEdges = new Set(oldClips.map(item => item.key));
+  const treatedSplits = cut.attributes?.length ? sourceBoundaries(edlSegments(actual))
+    .filter(item => !oldEdges.has(item.key) && !changed_frames.includes(item.frame)).map(item => item.frame) : [];
+  const click_frames = [...new Set([...joins.map(item => item.frame),
+    ...(hasSequence ? changed_frames : []), ...treatedSplits])];
+  errors.push(...attributeErrors);
+  return { errors, conform, cuts, changed_frames, click_frames, splice_fades: joins, overlays, audio, reframes };
 }

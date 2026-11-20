@@ -187,7 +187,7 @@ test('replace swaps in another take and tightening still removes pauses on revie
   ), sequenceAssets, sequenceAnalysis);
   assert.deepEqual(sequence(result), [['cut', [0, 118]], ['take', [20, 80]], ['cut', [297, 417]],
     ['cut', [435, 566]], ['cut', [583, 638]]]);
-  assert.ok(result.changes.outcomes.N1.frames.some(([start]) => start === 118));
+  assert.deepEqual(result.changes.outcomes.N1.frames, [[118, 178]]);
 });
 
 test('sequence operations reject reused footage and require explicit authority to restore protected frames', () => {
@@ -216,4 +216,142 @@ test('replacement candidates find unused repeated dialogue across assets on the 
   assert.deepEqual(candidates.map(({ target, with: alternate }) => [target, alternate]), [
     [{ asset: 'cut', range: [135, 165] }, { asset: 'take', range: [66, 96] }],
   ]);
+});
+
+test('source attributes survive a later delete and follow the moved surviving pieces', () => {
+  const imageHtml = html.replace('data-fps="30"', 'data-fps="30" data-width="160" data-height="90"');
+  const sized = { cut: { ...asset, width: 160, height: 90 } };
+  const measured = { cut: { visual_cuts: [], silences: [[0, 638]] } };
+  const edits = [
+    op('N1', 'audio', { asset: 'cut', range: [135, 292], gain_db: 6, fade_in: .1, fade_out: .15 }),
+    op('N2', 'reframe', { asset: 'cut', range: [435, 566], scale: 2, x: .25, y: .2 }),
+  ];
+  const first = applyOperations(cut, base, notes, sequenceInput(...edits), sized, measured);
+  assert.equal(first.cut.schema_version, 2);
+  assert.deepEqual(first.changes.outcomes.N1.frames, [[135, 292]]);
+  const generated = alignComposition(imageHtml, first.cut, sized);
+  assert.match(generated, /data-volume="1.995262[^"]*" data-fade-in="0.1" data-fade-out="0.15"/);
+  assert.match(generated, /width:200%!important/);
+  assert.doesNotMatch(generated, /id="shot-a"[^>]*data-volume=/);
+  const firstEdl = compositionEdl(generated, sized);
+  const inspect = candidate => inspectEdit({ base, actual: compositionEdl(candidate, sized), html: candidate,
+    ...first, analysis: measured, assets: sized });
+  assert.deepEqual(inspect(generated).errors, []);
+  assert.ok(inspect(generated.replace('data-fade-in="0.1"', 'data-fade-in="0.2"')).errors
+    .some(error => error.code === 'attribute-mismatch'));
+
+  const second = applyOperations(first.cut, firstEdl, [
+    note('N1', 'range', 170, 220), note('N2', 'range', 135, 292), note('N3', 'range', 435, 566),
+  ], { schema_version: 1, from: 'v2', ops: [
+    op('N1', 'delete', { asset: 'cut', range: [170, 220] }),
+    op('N2', 'move', { asset: 'cut', range: [135, 292], after: 'start' }),
+    op('N3', 'delete', { asset: 'cut', range: [435, 566] }),
+  ] }, sized, measured);
+  assert.deepEqual(sequence(second).slice(0, 2), [['cut', [135, 170]], ['cut', [220, 292]]]);
+  assert.equal(second.changes.outcomes.N3.status, 'anchor-lost');
+  assert.deepEqual(second.changes.anchor_losses[0].anchor, { asset: 'cut', range: [435, 566] });
+  const later = alignComposition(generated, second.cut, sized);
+  assert.equal([...later.matchAll(/data-volume="1\.995262/g)].length, 2);
+  assert.doesNotMatch(later, /clip-path/);
+});
+
+test('reframe rejects a crop that would reveal pixels beyond the source', () => {
+  assert.throws(() => applyOperations(cut, base, notes, sequenceInput(
+    op('N1', 'reframe', { asset: 'cut', range: [135, 292], scale: 0.5, x: .5, y: .5 }),
+  ), assets, analysis), /reframe.*scale/i);
+});
+
+test('audio mute uses zero volume and can be replaced on a narrower source interval', () => {
+  const first = applyOperations(cut, base, notes, sequenceInput(
+    op('N1', 'audio', { asset: 'cut', range: [135, 292], mute: true }),
+    op('N1', 'audio', { asset: 'cut', range: [175, 230], mute: false, gain_db: -6 }),
+  ), assets, analysis);
+  const generated = alignComposition(html, first.cut, assets);
+  assert.equal([...generated.matchAll(/data-volume="0"/g)].length, 2);
+  assert.match(generated, /data-volume="0.50118/);
+});
+
+test('HyperFrames renders source gain, fades, mute and a scaled crop', { timeout: 90_000 }, async t => {
+  const { mkdir, mkdtemp, rm, writeFile } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const { run } = await import('./cut/media.mjs');
+  const { verifyRenders } = await import('./cut/verify-render.mjs');
+  const dir = await mkdtemp(join(tmpdir(), 'dailies-cut-attributes-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const media = join(dir, 'media');
+  // A sine wave has no transcript. Isolate the unrelated speech check from
+  // Whisper's tendency to hallucinate words on music and test tones.
+  const whisper = join(dir, 'whisper');
+  const model = join(dir, 'model.bin');
+  await writeFile(whisper, '#!/bin/sh\nexit 0\n', { mode: 0o700 });
+  await writeFile(model, '');
+  const previous = { DAILIES_WHISPER: process.env.DAILIES_WHISPER,
+    DAILIES_WHISPER_MODEL: process.env.DAILIES_WHISPER_MODEL };
+  Object.assign(process.env, { DAILIES_WHISPER: whisper, DAILIES_WHISPER_MODEL: model });
+  t.after(() => {
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  });
+  await mkdir(media);
+  await run('ffmpeg', ['-v', 'error', '-f', 'lavfi', '-i', 'smptebars=size=160x90:rate=30',
+    '-f', 'lavfi', '-i', 'sine=frequency=523:sample_rate=48000', '-t', '3',
+    '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', join(media, 'cut.mp4')]);
+  await run('ffmpeg', ['-v', 'error', '-f', 'lavfi', '-i', 'color=c=blue:size=160x90:rate=30',
+    '-f', 'lavfi', '-i', 'sine=frequency=311:sample_rate=48000', '-t', '1',
+    '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', join(media, 'take.mp4')]);
+  const source = `<!doctype html><html><head><style>body{margin:0}[data-composition-id]{position:relative}
+    video{position:absolute;inset:0;width:100%;height:100%;object-fit:contain}</style></head><body>
+    <main data-composition-id="film" data-fps="30" data-width="160" data-height="90" data-duration-frame="90">
+    <video id="cut" class="clip" data-review-clip="cut" src="media/cut.mp4" data-start-frame="0"
+      data-duration-frame="90" data-has-audio="true" data-track-index="0"></video></main></body></html>`;
+  const localAssets = { cut: { ...asset, frame_count: 90, width: 160, height: 90 },
+    take: { ...sequenceAssets.take, frame_count: 30, width: 160, height: 90, audio: true } };
+  const measured = { cut: { visual_cuts: [], silences: [] }, take: { visual_cuts: [], silences: [] } };
+  const edl = compositionEdl(source, localAssets);
+  const result = applyOperations(cutFromEdl(edl, 'v1'), edl, [note('N1', 'range', 0, 90)], sequenceInput(
+    op('N1', 'insert', { asset: 'take', range: [0, 30], after: 'start' }),
+    op('N1', 'audio', { asset: 'cut', range: [0, 60], gain_db: 6, fade_in: .25, fade_out: .25 }),
+    op('N1', 'audio', { asset: 'cut', range: [60, 90], mute: true }),
+    op('N1', 'reframe', { asset: 'cut', range: [0, 60], scale: 2, x: .25, y: .6 }),
+  ), localAssets, measured);
+  const generated = alignComposition(source, result.cut, localAssets);
+  const actual = compositionEdl(generated, localAssets);
+  const edit = inspectEdit({ base: edl, actual, html: generated, ...result, analysis: measured, assets: localAssets });
+  assert.deepEqual(edit.errors, []);
+  const render = await verifyRenders({ dir, html: generated, edl: actual, assets: localAssets, media, edit,
+    input: { expected_speech: '' } });
+  const checks = render.rendered[0].checks;
+  assert.ok(checks.some(check => check.check === 'C2' && check.frame === 30 && check.passed), JSON.stringify(render));
+  assert.ok(checks.some(check => check.check === 'audio-level' && check.volume > 1 && check.passed), JSON.stringify(render));
+  assert.ok(checks.some(check => check.check === 'audio-level' && check.volume === 0 && check.passed), JSON.stringify(render));
+  assert.ok(checks.some(check => check.check === 'reframe-pixels' && check.passed), JSON.stringify(render));
+  assert.deepEqual(render.errors, []);
+  const wrong = generated.replace('data-volume="0"', 'data-volume="1"')
+    .replace(/ style="position:absolute!important;[^"]+"/, '');
+  await mkdir(join(dir, 'diagnostic'));
+  const bad = await verifyRenders({ dir: join(dir, 'diagnostic'), html: wrong, edl: actual, assets: localAssets,
+    media, edit, input: { expected_speech: '' } });
+  assert.ok(bad.errors.some(error => error.code === 'audio-level-mismatch' && error.volume === 0));
+  assert.ok(bad.errors.some(error => error.code === 'reframe-pixel-mismatch'));
+});
+
+test('short fades target new audible sequence splices and leave the old delete path unchanged', () => {
+  const measured = { cut: { visual_cuts: [], silences: [[132, 132], [292, 292]],
+    silence_seconds: [] } };
+  const moved = applyOperations(cut, base, notes, sequenceInput(
+    op('N1', 'move', { asset: 'cut', range: [132, 292], after: 'start' }),
+  ), assets, measured);
+  const generated = alignComposition(html, moved.cut, assets);
+  assert.match(generated, /data-fade-out="0\.03"/);
+  assert.match(generated, /data-fade-in="0\.03"/);
+  assert.doesNotMatch(generated, /data-fade-in="0\.03"[^>]*id="shot-a--f132"/);
+  assert.equal(moved.changes.splice_points.length, 2);
+
+  const deleted = applyOperations(cut, base, notes, sequenceInput(
+    op('N1', 'delete', { asset: 'cut', range: [135, 292] }),
+  ), assets, measured);
+  assert.doesNotMatch(alignComposition(html, deleted.cut, assets), /data-fade-/);
 });

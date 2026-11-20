@@ -115,6 +115,21 @@ export async function cropPixels(file, { x, y, width, height }, [start, end], re
     64 * 32 * 3, receive);
 }
 
+export const audioSampleRate = 48000;
+
+export async function audioChannels(file) {
+  const { stdout } = await run('ffprobe', ['-v', 'error', '-select_streams', 'a:0',
+    '-show_entries', 'stream=channels', '-of', 'csv=p=0', file]);
+  return Number(stdout.trim());
+}
+
+export async function audioSamples(file, start, duration) {
+  const { stdout } = await run('ffmpeg', [...ffmpeg, '-loglevel', 'error', '-ss', String(start),
+    '-i', file, '-t', String(duration), '-vn', '-ar', String(audioSampleRate), '-ac', '2',
+    '-c:a', 'pcm_f32le', '-f', 'f32le', '-'], { encoding: 'buffer' });
+  return new Float32Array(stdout.buffer, stdout.byteOffset, Math.floor(stdout.length / 4));
+}
+
 export async function audioPeak(file, seconds) {
   const { stdout } = await run('ffmpeg', [...ffmpeg, '-loglevel', 'error', '-ss', String(Math.max(0, seconds - .02)),
     '-i', file, '-t', '0.04', '-vn', '-ar', '16000', '-c:a', 'pcm_s16le', '-f', 's16le', '-'],

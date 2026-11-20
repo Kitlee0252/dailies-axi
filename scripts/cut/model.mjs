@@ -1,3 +1,4 @@
+import { attributeCutSchema, attributeValue } from './attributes.mjs';
 import { byAsset, intersection, length } from './ranges.mjs';
 
 export const assetId = /^[a-zA-Z0-9][\w-]*$/;
@@ -70,16 +71,20 @@ export function reviewedSpans(edl, note) {
 }
 
 export function locateAnchor(segments, anchor) {
-  const hits = placed(segments).flatMap(segment => {
-    if (segment.asset !== anchor.asset) return [];
-    const source = intersection(segment.range, anchor.range);
-    return source ? [{ source, output: source.map(frame => frame + segment.output[0] - segment.range[0]) }] : [];
-  });
+  const hits = anchorHits(segments, anchor);
   const first = hits[0];
   if (first?.source[0] !== anchor.range[0] || hits.at(-1)?.source[1] !== anchor.range[1]) return null;
   if (hits.some((hit, i) => i > 0 && (hit.source[0] !== hits[i - 1].source[1] ||
       hit.output[0] !== hits[i - 1].output[1]))) return null;
   return [first.output[0], hits.at(-1).output[1]];
+}
+
+export function anchorHits(segments, anchor) {
+  return placed(segments).flatMap(segment => {
+    if (segment.asset !== anchor.asset) return [];
+    const source = intersection(segment.range, anchor.range);
+    return source ? [{ source, output: source.map(frame => frame + segment.output[0] - segment.range[0]) }] : [];
+  });
 }
 
 export function sourceFrameAfter(before, after, deleted) {
@@ -108,7 +113,13 @@ export function reusesFootage(segments) {
 }
 
 export function validateCut(cut, edl, assets, version) {
-  requireSchema(cut, 'cut.json');
+  if (cut?.schema_version === attributeCutSchema) {
+    if (!Array.isArray(cut.attributes)) throw new Error('cut.json needs an attributes array');
+    for (const item of cut.attributes) {
+      checkSpan(item.anchor, assets, 'Attribute anchor');
+      attributeValue(item.kind, item);
+    }
+  } else requireSchema(cut, 'cut.json');
   if (cut.version !== version || cut.fps !== edl.fps || !sameFootage(cut.segments, edlSegments(edl))) {
     throw new Error('cut.json does not match the locked review. Select/build the intended version first.');
   }

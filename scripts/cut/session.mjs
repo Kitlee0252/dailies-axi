@@ -129,6 +129,7 @@ function requestedAssets(input, cut) {
       op?.op === 'replace' ? [op.with?.asset] : []) : []),
     ...(cut?.protected ?? []).map(span => span.asset),
     ...(cut?.overlays ?? []).map(item => item.anchor.asset),
+    ...(cut?.attributes ?? []).map(item => item.anchor.asset),
   ].filter(id => typeof id === 'string');
 }
 

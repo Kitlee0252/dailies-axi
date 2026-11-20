@@ -1,6 +1,7 @@
-import { checkSpan, elementId, locateAnchor, nextVersion, placed, requireSchema, reviewedSpans,
+import { attributeCutSchema, attributeValue, planSpliceFades, splitByAttributes, updateAttributes } from './attributes.mjs';
+import { anchorHits, checkSpan, elementId, locateAnchor, nextVersion, placed, requireSchema, reviewedSpans,
   reusesFootage, schema, sourceFrameAfter, validateCut } from './model.mjs';
-import { byAsset, difference, intersection, overlaps, subtract, union } from './ranges.mjs';
+import { byAsset, difference, intersection, length, overlaps, subtract, union } from './ranges.mjs';
 import { outcomeMetadata } from '../outcomes.mjs';
 
 const SNAP_RADIUS = 6;
@@ -243,6 +244,23 @@ function makeDecisions(cut, edl, notes, ops, assets, analysis) {
       case 'move':
       case 'insert':
       case 'replace': details = sequenceOp(op, reviewed, cut, assets, analysis); break;
+      case 'audio':
+      case 'reframe': {
+        const { asset, range } = op;
+        const anchor = { asset, range };
+        checkSpan(anchor, assets, op.note);
+        if (!anchorHits(cut.segments, anchor).length || (op.scope === 'local' &&
+            !reviewed.some(span => span.asset === asset && overlaps(span.range, range)))) {
+          throw new Error(`Note ${op.note} needs an attribute range overlapping its reviewed footage`);
+        }
+        if (op.op === 'audio' && !assets[asset].audio) throw new Error(`Asset ${asset} has no audio to adjust`);
+        const value = attributeValue(op.op, op);
+        if ((value.fade_in ?? 0) + (value.fade_out ?? 0) > length(range) / cut.fps) {
+          throw new Error('Audio fades cannot exceed the requested source span');
+        }
+        details = { attribute: { kind: op.op, anchor, ...value } };
+        break;
+      }
       case 'overlay': details = overlayOp(op, reviewed, assets); break;
       case 'ask':
       case 'decline':
@@ -287,19 +305,31 @@ function outcomesFor(notes, decisions, before, cut, anchorLosses, metadata = {})
         }
       }
       for (const span of item.op === 'move' ? [item.target] : item.added ?? []) {
-        frames.push(...placed(cut.segments).flatMap(segment => {
-          const hit = segment.asset === span.asset && intersection(segment.range, span.range);
-          return hit ? [hit.map(frame => frame + segment.output[0] - segment.range[0])] : [];
-        }));
+        frames.push(...anchorHits(cut.segments, span).map(hit => hit.output));
       }
-      for (const span of effective) {
+      if (item.attribute) {
+        const { kind, anchor, ...value } = item.attribute;
+        const hits = cut.attributes.filter(entry => entry.kind === kind && entry.anchor.asset === anchor.asset &&
+          Object.entries(value).every(([key, setting]) => entry[key] === setting) &&
+          Object.keys(entry).length === Object.keys(item.attribute).length).flatMap(entry => {
+          const range = intersection(anchor.range, entry.anchor.range);
+          return range ? anchorHits(cut.segments, { asset: anchor.asset, range }).map(hit => hit.output) : [];
+        });
+        frames.push(...hits);
+        if (!hits.length && anchorHits(cut.segments, anchor).length) {
+          if (status === 'applied') status = 'pending';
+          messages.push('Superseded by another treatment.');
+        }
+      }
+      for (const span of item.op === 'replace' ? [] : effective) {
         const start = sourceFrameAfter(before.segments, cut.segments, span);
         if (start !== undefined) frames.push([start, start + 1]);
       }
     }
     for (const loss of anchorLosses.filter(loss => loss.notes.includes(note.id))) {
       status = 'anchor-lost';
-      if (!items.some(item => item.overlay?.element === loss.element)) messages.push(`Anchor lost for #${loss.element}.`);
+      if (loss.attribute) messages.push(`Anchor lost for ${loss.attribute} on ${loss.anchor.asset}.`);
+      else if (!items.some(item => item.overlay?.element === loss.element)) messages.push(`Anchor lost for #${loss.element}.`);
     }
     if (details.note) messages.push(details.note);
     return [note.id, { status, note: messages.join(' '), frames: union(frames), ...extra }];
@@ -324,13 +354,23 @@ export function applyOperations(cut, edl, notes, input, assets, analysis) {
     return id;
   }
   const trimmed = cut.segments.map(segment => ({ ...segment, range: trims.get(segment.clip) ?? segment.range }));
-  const segments = sequenceEdits(trimmed, decisions, allocateId, removals).flatMap(({ asset, range, clip }) =>
+  const hasSequence = decisions.some(item => ['move', 'insert', 'replace'].includes(item.op));
+  const ordinaryRemovals = hasSequence && byAsset(decisions.filter(item => item.op !== 'replace')
+    .flatMap(item => item.removed ?? []));
+  const ordinary = ordinaryRemovals && trimmed.flatMap(({ asset, range }) =>
+    subtract(range, ordinaryRemovals.get(asset) ?? []).map(range => ({ asset, range })));
+  const footage = sequenceEdits(trimmed, decisions, allocateId, removals).flatMap(({ asset, range, clip }) =>
     subtract(range, removals.get(asset) ?? []).map((range, i) => ({
       asset, range, clip: i ? allocateId(clip, range[0]) : clip,
     })));
   if (decisions.some(item => item.target &&
-      item.op === 'move' && !segments.some(segment => segment.asset === item.target.asset &&
+      item.op === 'move' && !footage.some(segment => segment.asset === item.target.asset &&
         overlaps(segment.range, item.target.range)))) throw new Error('Another edit removes all moved footage');
+  const attributes = decisions.reduce((items, item) => item.attribute ? updateAttributes(items, item.attribute) : items,
+    cut.attributes ?? []);
+  const lostAttributes = attributes.filter(item => !anchorHits(footage, item.anchor).length);
+  const surviving = attributes.filter(item => !lostAttributes.includes(item));
+  const segments = splitByAttributes(footage, surviving, allocateId);
   if (reusesFootage(segments)) throw new Error('The edits would reuse source footage');
   if (!segments.length) throw new Error('The operations remove all footage');
   const byElement = new Map(cut.overlays.map(overlay => [overlay.element, overlay]));
@@ -348,11 +388,20 @@ export function applyOperations(cut, edl, notes, input, assets, analysis) {
     element, anchor, notes: [...new Set(decisions.filter(op => op.overlay?.element === element ||
       op.removed?.some(span => span.asset === anchor.asset && overlaps(span.range, anchor.range))).map(op => op.note))],
   }));
+  for (const { kind, anchor } of lostAttributes) {
+    anchorLosses.push({ attribute: kind, anchor, notes: [...new Set(decisions.filter(op =>
+      op.attribute?.kind === kind && op.attribute.anchor.asset === anchor.asset && overlaps(op.attribute.anchor.range, anchor.range) ||
+      op.removed?.some(span => span.asset === anchor.asset && overlaps(span.range, anchor.range))).map(op => op.note))] });
+  }
   const removed = difference(cut.segments, segments);
   const added = difference(segments, cut.segments);
   const protectedSpans = difference([...cut.protected, ...removed], added);
   const version = nextVersion(input.from);
-  const next = { schema_version: schema, version, fps: cut.fps, segments, overlays, protected: protectedSpans };
+  const spliceFades = planSpliceFades(cut, { fps: cut.fps, segments, attributes: surviving }, decisions, assets, analysis, ordinary);
+  const usesAttributes = cut.schema_version === attributeCutSchema || spliceFades.length || decisions.some(item => item.attribute);
+  const next = { schema_version: usesAttributes ? attributeCutSchema : schema, version, fps: cut.fps,
+    segments, overlays, protected: protectedSpans, ...(usesAttributes ? { attributes: surviving } : {}),
+    ...(spliceFades.length ? { splice_fades: spliceFades } : {}) };
   const timeline = placed(segments);
   const outcomeNotes = notes.filter(note => !note.generated || decisions.some(op => op.note === note.id));
   const changes = { schema_version: schema, kind: 'dailies-cut-changes', from: input.from, to: version,

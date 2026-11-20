@@ -37,6 +37,8 @@ The unmodified runtime from `hyperframes@0.9.69` is inlined in generated review 
 
 ## Editing workflow references
 
+The short audio fade at a new hard splice follows the media-use rule documented by [video-use](https://github.com/browser-use/video-use/tree/43cfc56). Rendering uses HyperFrames' native clip fades.
+
 The edit engine calls the existing FrameJam-derived frame extraction and local Whisper lookup listed above. Its cut table, render checks and operations were written for this project. The review and pacing practices in the edit skill draw on FrameJam's [Clean Cut playbook](https://github.com/moritzkremb/framejam/tree/bc45364aff90ba931d350e931291940fdc6e604c/playbooks/clean-cut), [video-use](https://github.com/browser-use/video-use/tree/43cfc56) (MIT), [take-one](https://github.com/talsiach/take-one/tree/43fd27b) (MIT), and public workflow descriptions in [mrpaidsocial-video-editor-agent](https://github.com/mrpaidsocial/mrpaidsocial-video-editor-agent/tree/81a8eea).
 
 [Auto-Editor’s JSON timeline](https://github.com/WyattBlue/auto-editor) is a schema reference. [OpenTimelineIO](https://github.com/AcademySoftwareFoundation/OpenTimelineIO) is a naming reference. Neither is a dependency.
