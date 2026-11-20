@@ -7,7 +7,7 @@ import { updateSelection } from './review-selection.mjs';
 
 const $ = selector => document.querySelector(selector);
 const iframe = $('#composition'), canvas = $('#canvas'), surface = $('#surface');
-const composer = $('#composer'), input = $('#feedback'), seek = $('#seek'), timeline = $('#timeline');
+const composer = $('#composer'), input = $('#feedback'), seek = $('#seek'), timeline = $('#timeline'), send = $('#send');
 const playhead = Object.assign(document.createElement('span'), { className: 'playhead' });
 const wordsList = $('#words'), overlay = $('#transcript-overlay'), overlayToggle = $('#toggle-transcript');
 const { edl, assets, transcripts, version, record } = config;
@@ -24,12 +24,12 @@ let transcriptEdits = [], reviewedTranscripts = transcripts;
 $('#version').textContent = version;
 const status = message => { $('#status').textContent = message; };
 const editable = () => ready && stateLoaded && !locked && !sent;
-const hasFeedback = () => notes.length > 0 || reactions.size > 0 || transcriptEdits.length > 0;
+const hasFeedback = () => notes.length > 0 || transcriptEdits.length > 0;
 
 function resize() {
   if (!ready) return;
   iframe.style.transform = `scale(${canvas.clientWidth / width})`;
-  if (draft?.rect) placeComposer(draft.rect);
+  placeComposer();
   positionOverlay();
 }
 
@@ -110,9 +110,6 @@ function closeComposer() {
   const restoreFocus = draft && composer.contains(document.activeElement);
   draft = null;
   composer.hidden = true;
-  composer.classList.remove('spatial');
-  composer.style.removeProperty('left');
-  composer.style.removeProperty('top');
   input.value = '';
   if (restoreFocus) composerAnchor?.focus({ preventScroll: true });
   composerAnchor = null;
@@ -141,12 +138,23 @@ function position(event) {
   return { x: (event.clientX - bounds.left) / bounds.width, y: (event.clientY - bounds.top) / bounds.height };
 }
 
-function placeComposer(rect) {
-  const left = canvas.offsetLeft + rect.x * canvas.clientWidth;
-  const bottom = (rect.y + rect.height) * canvas.clientHeight;
-  composer.style.left = `${Math.max(0, Math.min(left, $('#stage').clientWidth - composer.offsetWidth))}px`;
-  const above = rect.y * canvas.clientHeight - composer.offsetHeight - 8;
-  composer.style.top = `${bottom + composer.offsetHeight + 8 > canvas.clientHeight && above >= 0 ? above : bottom + 8}px`;
+function placeComposer() {
+  if (!draft) return;
+  let anchor = (composerAnchor?.isConnected ? composerAnchor : timeline).getBoundingClientRect();
+  if (draft.rect) {
+    const bounds = canvas.getBoundingClientRect();
+    const { x, y, height } = draft.rect;
+    anchor = { left: bounds.left + x * bounds.width, top: bounds.top + y * bounds.height,
+      bottom: bounds.top + (y + height) * bounds.height };
+  }
+  const gap = 8;
+  const { offsetHeight, offsetWidth } = composer;
+  const viewportWidth = document.documentElement.clientWidth;
+  const viewportHeight = document.documentElement.clientHeight;
+  const below = anchor.bottom + gap, above = anchor.top - offsetHeight - gap;
+  const y = below + offsetHeight <= viewportHeight - gap || above < gap ? below : above;
+  const x = Math.max(gap, Math.min(anchor.left, viewportWidth - offsetWidth - gap));
+  composer.style.transform = `translate(${x}px, ${Math.max(gap, Math.min(y, viewportHeight - offsetHeight - gap))}px)`;
 }
 
 function openComposer(note, waiting = false, anchor = document.activeElement) {
@@ -154,9 +162,8 @@ function openComposer(note, waiting = false, anchor = document.activeElement) {
   draft = { ...note, version, time_seconds: note.frame / fps, targets: [] };
   $('#targets').textContent = waiting ? 'Finding editable elements and footage…' : commentAt(draft);
   composer.querySelector('[type=submit]').disabled = waiting;
-  composer.classList.toggle('spatial', Boolean(note.rect));
   composer.hidden = false;
-  if (note.rect) placeComposer(note.rect);
+  placeComposer();
   redraw();
   input.focus({ preventScroll: true });
 }
@@ -220,7 +227,6 @@ timeline.onpointermove = event => {
     if (index !== frame) seekFrame(index);
     return;
   }
-  if (!editable()) return;
   let start = Math.min(index, dragRange.origin), end = Math.max(index, dragRange.origin) + 1;
   // A dragged range snaps each edge to a shot cut within a fifth of a second.
   if (end - start > 2) {
@@ -239,7 +245,7 @@ timeline.onpointerup = event => {
     updateRangeFields();
     return;
   }
-  const selected = editable() && dragRange.dragged ? dragRange.preview : null;
+  const selected = dragRange.dragged ? dragRange.preview : null;
   dragRange = null;
   selectRange(selected ? { type: 'range', ...selected } : { type: 'clear' });
   const index = selected?.start ?? timelineFrame(event);
@@ -253,8 +259,7 @@ timeline.onpointercancel = timeline.onlostpointercapture = event => {
 
 for (const selector of ['#range-start', '#range-end']) {
   $(selector).onchange = () => {
-    if (!editable()) return;
-    closeComposer();
+    if (!ready) return;
     const start = Math.max(0, Math.min(frameCount - 1, Math.round(Number($('#range-start').value))));
     const end = Math.max(start + 1, Math.min(frameCount, Math.round(Number($('#range-end').value))));
     navigate(start, { type: 'range', start, end });
@@ -289,7 +294,7 @@ document.addEventListener('keydown', event => {
   if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
     const delta = event.key === 'ArrowLeft' ? -1 : 1;
     if (event.shiftKey) {
-      if (!editable() || !range || dragRange || gesture) return;
+      if (!range || dragRange || gesture) return;
       event.preventDefault();
       selectRange({ type: 'adjust-end', delta, frameCount });
       return;
@@ -357,7 +362,7 @@ function renderTranscript() {
       });
       const bounds = { start: first, end: last };
       button.onclick = event => {
-        navigate(first, event.shiftKey && editable() ? { type: 'cue', cue: bounds } : { type: 'clear' });
+        navigate(first, event.shiftKey ? { type: 'cue', cue: bounds } : { type: 'clear' });
       };
       const editor = Object.assign(document.createElement('input'), {
         className: 'cue-editor', type: 'text', maxLength: 1000, hidden: true,
@@ -368,9 +373,12 @@ function renderTranscript() {
       row.append(button, editor, edit);
       const line = { ...bounds, asset: segment.asset, from: indexes.get(words[0]),
         to: indexes.get(words.at(-1)) + 1, row, button, edit, editor };
-      edit.onclick = () => startCueEdit(line);
+      edit.onclick = () => {
+        if (editingCue === line) finishCueEdit(true);
+        else startCueEdit(line);
+      };
       editor.onkeydown = event => {
-        if (event.key !== 'Enter' && event.key !== 'Escape') return;
+        if (event.isComposing || (event.key !== 'Enter' && event.key !== 'Escape')) return;
         event.preventDefault();
         event.stopPropagation();
         finishCueEdit(event.key === 'Enter');
@@ -401,11 +409,17 @@ function refreshCueText() {
     const changed = edits.length || untouched.some(word => word.review_edited);
     cue.button.textContent = cue.text;
     cue.button.title = `${cue.text}\nJump to F${cue.start}. Shift-click to select or extend a range.`;
-    cue.edit.textContent = changed ? 'Edited' : 'Edit';
-    cue.edit.setAttribute('aria-label', `${changed ? 'Edited transcript' : 'Edit transcript'} at F${cue.start}`);
-    cue.edit.classList.toggle('edited', Boolean(changed));
+    cue.row.classList.toggle('edited', Boolean(changed));
+    cue.button.setAttribute('aria-label', changed ? `${cue.text} (edited)` : cue.text);
+    updateCueEditButton(cue);
   }
   updateOverlay();
+}
+
+function updateCueEditButton(cue) {
+  const active = editingCue === cue;
+  cue.edit.textContent = active ? 'Done' : 'Edit';
+  cue.edit.setAttribute('aria-label', `${active ? 'Done editing' : 'Edit'} transcript at F${cue.start}`);
 }
 
 function startCueEdit(cue) {
@@ -415,6 +429,7 @@ function startCueEdit(cue) {
   cue.editor.value = cue.text;
   cue.button.hidden = true;
   cue.editor.hidden = false;
+  updateCueEditButton(cue);
   cue.editor.focus({ preventScroll: true });
   cue.editor.select();
 }
@@ -425,11 +440,13 @@ function finishCueEdit(save, restoreFocus = true) {
   const text = cue.editor.value.trim();
   if (save && editable() && !text) {
     status('Enter the corrected line, or press Esc to cancel.');
+    cue.editor.focus({ preventScroll: true });
     return;
   }
   editingCue = undefined;
   cue.editor.hidden = true;
   cue.button.hidden = false;
+  updateCueEditButton(cue);
   if (restoreFocus) cue.edit.focus({ preventScroll: true });
   if (!save || !editable() || text === cue.text) return;
   const original = transcripts[cue.asset].words.slice(cue.from, cue.to);
@@ -505,8 +522,9 @@ overlay.onpointerup = overlay.onpointercancel = overlay.onlostpointercapture = (
 function renderNotes() {
   $('#count').textContent = `(${notes.length})`;
   $('#empty').hidden = notes.length > 0;
-  $('#send').disabled = !editable() || !hasFeedback();
-  for (const selector of ['#range-start', '#range-end', '#add-range', '#whole']) $(selector).disabled = !editable();
+  send.disabled = !editable() || !hasFeedback();
+  send.setAttribute('aria-disabled', String(send.disabled));
+  for (const selector of ['#add-range', '#whole']) $(selector).disabled = !editable();
   for (const cue of cues) cue.edit.disabled = !editable();
   $('#reviewer').disabled = !editable();
   surface.classList.toggle('locked', locked || sent);
@@ -713,7 +731,7 @@ identity.onchange = () => {
 $('#reviewer-field').hidden = reviewers.length < 2;
 renderHistory();
 
-$('#send').onclick = async () => {
+send.onclick = async () => {
   if (!editable() || !hasFeedback()) return;
   if (editingCue) return status('Press Enter to save the transcript edit, or Esc to cancel.');
   if (!window.lavish?.queuePrompt || !window.lavish?.sendQueuedPrompts) return status('Open with lavish-axi to send feedback.');
@@ -770,7 +788,7 @@ iframe.addEventListener('load', () => {
           ...draft.footage.map(anchor => `${anchor.clip} · source F${anchor.source_frame}`),
         ].join(', ') || 'Background region';
         composer.querySelector('[type=submit]').disabled = false;
-        placeComposer(draft.rect);
+        placeComposer();
       }
       return;
     }
@@ -788,7 +806,7 @@ iframe.addEventListener('load', () => {
     $('#range-start').max = frameCount - 1;
     $('#range-end').max = frameCount;
     timeline.hidden = false;
-    for (const selector of ['#play', '#previous', '#next', '#seek']) $(selector).disabled = false;
+    for (const selector of ['#play', '#previous', '#next', '#seek', '#range-start', '#range-end']) $(selector).disabled = false;
     seekFrame(initialPosition());
     renderTranscript();
     renderNotes();
@@ -799,4 +817,6 @@ iframe.addEventListener('load', () => {
 }, { once: true });
 new ResizeObserver(resize).observe(canvas);
 new ResizeObserver(() => { if (ready) positionPlayhead(); }).observe(timeline);
+window.addEventListener('scroll', placeComposer, { passive: true });
+window.addEventListener('resize', placeComposer);
 iframe.srcdoc = config.liveComposition;

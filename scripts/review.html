@@ -27,10 +27,9 @@
     #overlay-text { height: 2.3em; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; text-align: center }
     .region { position: absolute; border: 2px solid var(--mint); background: #b8f3d822 }
     .region b { position: absolute; left: 0; top: 0; background: var(--mint); color: #131824; font: bold 12px system-ui; padding: 1px 5px }
-    #composer { position: absolute; top: 8px; left: 50%; translate: -50% 0; z-index: 2;
-      width: min(330px, calc(100% - 16px)); padding: 12px; border: 1px solid var(--line); border-radius: 9px;
-      background: #211d30; box-shadow: 0 8px 32px #0009 }
-    #composer.spatial { translate: none }
+    #composer { position: fixed; top: 0; left: 0; z-index: 2;
+      width: min(330px, calc(100vw - 16px)); max-height: calc(100dvh - 16px); overflow: auto;
+      padding: 12px; border: 1px solid var(--line); border-radius: 9px; background: #211d30; box-shadow: 0 8px 32px #0009 }
     #surface.locked { cursor: default }
     #timeline { height: 24px; margin-top: 8px; background: #262236; position: relative; border: 1px solid var(--line); border-radius: 6px; cursor: crosshair; touch-action: none }
     #timeline span { position: absolute; top: 2px; bottom: 2px; pointer-events: none }
@@ -49,9 +48,9 @@
     #words { height: 11rem; overflow: auto; scrollbar-gutter: stable; padding: 2px 4px }
     .transcript-line { display: grid; grid-template-columns: minmax(0, 1fr) 4.25rem; gap: 4px; height: 2.75rem; margin-bottom: 4px }
     .transcript-line > * { min-width: 0; height: 100% }
-    .cue-text { text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
+    .cue-text { text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; user-select: none }
     .cue-edit { padding-inline: 4px }
-    .cue-edit.edited { color: var(--mint); border-color: #5a9077 }
+    .transcript-line.edited .cue-text { border-inline-end: 3px solid var(--mint) }
     .cue-editor { width: 100%; padding: 6px 10px; color: inherit; background: #141222; border: 1px solid var(--mint); border-radius: 6px }
     #transcript h2 { margin: 0 0 4px }
     #words .in-range { background: #315347; border-color: #5a9077 }
@@ -62,6 +61,7 @@
     button.primary { background: var(--mint); color: #131824; font-weight: 700 }
     button[aria-pressed="true"] { border-color: var(--mint); color: var(--mint) }
     button:disabled { opacity: .5; cursor: default }
+    #send:disabled { opacity: 1; background: #353240; color: #aaa4b4; border-color: var(--line) }
     :focus-visible { outline: 2px solid #c4adff; outline-offset: 2px }
     textarea { display: block; resize: vertical; width: 100%; min-height: 66px; margin: 7px 0; padding: 6px; background: #141222; color: inherit; border: 1px solid var(--line); border-radius: 4px }
     .row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px }
@@ -144,7 +144,7 @@
     <ol id="notes"></ol>
   </div>
   <label id="reviewer-field" hidden>Reviewing as <select id="reviewer"></select></label>
-  <button id="send" class="primary" disabled>Send feedback to agent</button>
+  <button id="send" class="primary" disabled aria-disabled="true">Send feedback to agent</button>
   <p id="status" role="status">Loading live composition…</p>
 </main>
 <!-- REVIEW_SCRIPT -->
