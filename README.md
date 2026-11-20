@@ -1,5 +1,7 @@
 # Dailies AXI
 
+[Architecture diagram](docs/architecture.html)
+
 Dailies AXI builds local video review pages for Lavish. A reviewer can mark an on-screen region, select a frame range, or leave a whole-video note. The agent receives one feedback batch per version, with references to the composition and exact source frames.
 
 ## Install from a clone
@@ -170,6 +172,49 @@ For a taste note, apply two or more named candidates from the same locked batch.
 `verify` checks conform against the locked EDL, source cut safety, flash shots, overlay placement, and duration. The actual render is checked independently for frame count, flash shots, cut audio, dialogue and visible overlay pixels. Loudness and pause heuristics are warnings. Up to three minutes, the full render is automatic. For a longer edit, ask the reviewer whether to render all of it. Use `--render` if they agree or `--windows` for localized evidence around edited cuts and overlays. HyperFrames 0.9.69 supports window renders at 24, 25, 30 and 60 fps. A diagnostic `--edl-only` run cannot authorize delivery. Telemetry and update checks are disabled for engine renders.
 
 The review consumes verified `changes.json` with the adjacent `verify.json`. It checks the receipt against the composition, proxies and locked inputs before building. The change list preserves each note's status, output frames, affected source ranges and operation details. It and the reviewer's later reactions are the inputs for recording preferences. Keep candidates, transcripts, analysis and render evidence off Git.
+
+## Learn from review feedback
+
+On the first open, pass `--brief-file brief.json`. The file is copied into the private workspace. The optional text brief remains available via `--brief`.
+
+```json
+{
+  "schema_version": 1,
+  "project": "short-demo",
+  "context": { "platform": "douyin", "format": "koubo", "target_s": 30 },
+  "reviewers": [{ "id": "R1", "role": "editor" }],
+  "decision_owner": "R1",
+  "learning": { "enabled": true }
+}
+```
+
+The next review page shows the previous notes and outcomes with frame links, preference disclosures and reactions. Reviewers can accept, reject, choose an offered alternative, or reopen an outcome. Send a note, reaction, or both. `notes.json` schema 3 adds the reviewer, reactions and optional note-level reopen references. The cut engine also reads locked schema 2 batches. Anonymous feedback stays in the workspace's project decisions.
+
+Run these commands from the workspace.
+
+```sh
+dailies-cut learn ingest --round v2
+dailies-cut learn ingest --round v2 --classified learn.classify.json
+dailies-cut learn plan --round v2
+dailies-cut plan v2
+```
+
+Use the classification schema and vocabulary in [dailies-edit](skills/dailies-edit/references/dimensions.md). `learn ingest` writes a classification list and transition receipt under `learning/`. Read the transition notices before writing the next outcome. `dailies-cut plan` includes matching learning entries in its operation draft. For taste alternatives, apply and verify named candidates from the same locked feedback. Name the choices in `ops.json` under `outcomes.<note>.alternatives`, each with an `id` and optional `direction`, `value`, `label`, or `main: true`. The next round's reaction records the choice for subsequent cuts.
+
+Copy a used learning entry's `basis` into the operation. Set `outcomes.<note>.learned` to the entry's `disclosure` plus its `mode`. Add acknowledgements, transition notices or the explanation of an inferred reopening under `outcomes.<note>.note`. `verify` blocks undisclosed learned applications and conflicts with surviving project decisions. Inspect the verified output before delivery. Existing source-footage protections apply to all candidates, including a subsequent request for an alternative.
+
+Project decisions apply immediately. A reviewer preference becomes a default for the same context with at least 3.0 decayed positive evidence, explicit evidence from at least two projects, a Wilson lower bound of 0.40 and explicit confirmation within 365 days. An express long-term preference takes effect in its stated context. A stale established preference becomes a suggestion and is archived after 730 days. With `auto_apply: false` (the default), a learned preference can only drive a change within the current note's scope. A reviewer can opt in by setting `settings.auto_apply` in their local profile. The plan identifies unrelated defaults as an offer at most once per project and dimension.
+
+```sh
+dailies-cut learn status --reviewer R1
+dailies-cut learn forget 'R1|pacing.sentence_gap|douyin-koubo|tighter' --quote 'Please stop using this preference'
+dailies-cut learn pause                 # add --reviewer R1 for just that profile
+dailies-cut learn pause --resume
+dailies-cut learn ingest --signoff      # on reviewer signoff of the final locked round
+dailies-cut learn propose
+```
+
+`DAILIES_LEARN=off` pauses reviewer defaults for a process. The private workspace holds `learning/events.jsonl`, `decisions.json`, `decisions.md` and versioned `params.json`. `${DAILIES_HOME:-~/.dailies}` holds the cross-project ledger, reviewer caches and pending proposals. Leave all these records local. Use `learn status --at ISO --rebuild` to reproduce the reviewer cache at a fixed calculation time. Only cross-project evidence with at least three reviewers, five projects and no objection can produce a general proposal. The CLI announces newly written proposals for human review. A human records a rejection or reversal in the proposal and includes `reviewed_at` for the cooldown. A proposal draws context and role labels from generic vocabulary to protect client and reviewer names.
 
 ## Install the agent skills
 

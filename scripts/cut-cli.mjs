@@ -4,6 +4,7 @@ import { parseArgs } from 'node:util';
 import { readManifest } from './manifest.mjs';
 import { analyzeAssets } from './cut/analyze.mjs';
 import { apply, plan, select, verify } from './cut/session.mjs';
+import { learnHelp, runLearning } from './cut/learning.mjs';
 
 const help = `Usage: dailies-cut <command> [options]
 
@@ -15,6 +16,7 @@ Run in the review workspace, or pass --workspace DIR.
   verify <candidate> [--render | --windows | --edl-only]
                      [--composition FILE]            Check the candidate (alternate HTML is diagnostic only)
   select <candidate>                                 Install a verified candidate as the working cut
+${learnHelp}
 
 Verification renders the full edit up to 3 minutes. For a longer edit,
 ask whether to render the whole film (--render) or cut windows (--windows).`;
@@ -31,6 +33,7 @@ const specs = {
 
 try {
   if (!command || ['--help', '-h'].includes(command) || args.includes('--help')) console.log(help);
+  else if (command === 'learn') console.log(JSON.stringify(await runLearning(args), null, 2));
   else {
     const spec = Object.hasOwn(specs, command) && specs[command];
     if (!spec) throw new Error(help);

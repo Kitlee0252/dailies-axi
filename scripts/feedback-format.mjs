@@ -27,7 +27,7 @@ export function sortNotes(comments) {
   return [...comments].sort((a, b) => Number(!!b.whole_video) - Number(!!a.whole_video) || a.frame - b.frame);
 }
 
-export function feedbackPrompt(version, comments) {
+export function feedbackPrompt(version, comments, reactions = []) {
   const lines = [`# Video feedback (${version})`, '',
     `Please make these ${comments.length} change${comments.length === 1 ? '' : 's'}:`, ''];
   for (const [i, c] of sortNotes(comments).entries()) {
@@ -38,6 +38,10 @@ export function feedbackPrompt(version, comments) {
     if (c.spoken) lines.push(`  - Spoken in this range: “${c.spoken}”`);
     if (c.spoken_around) lines.push(`  - Spoken around then: “${c.spoken_around}”`);
     lines.push(`  - Comment id: \`${c.id}\``);
+    if (c.reopens) lines.push(`  - Reopens ${c.reopens}`);
+  }
+  for (const reaction of reactions) {
+    lines.push(`- ${reaction.outcome}: ${reaction.choice ? `chose ${reaction.choice}` : reaction.verdict}`);
   }
   lines.push('', 'Use the version EDL and source frames in the context data when editing footage. Build the next version with a summary and the outcomes for this round.');
   return lines.join('\n');

@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "params_version": 1,
+  "halfLifeDays": 180,
+  "staleDays": 365,
+  "archiveDays": 730,
+  "contestWindowDays": 90,
+  "contestMin": 1,
+  "z": 1.96,
+  "active": { "pos": 3, "projects": 2, "lb": 0.4 },
+  "candidate": { "pos": 1, "lb": 0.2 },
+  "general": { "reviewers": 3, "projects": 5, "cooldownDays": 180, "retryEvidenceFactor": 2 },
+  "silentCapPerProject": 0.5,
+  "summaryLimit": 20,
+  "weights": {
+    "stated": 0,
+    "explicit_note": 1,
+    "alt_chosen": 1,
+    "alt_unchosen": 0,
+    "accepted": 1,
+    "signoff": 0.5,
+    "silent": 0.25,
+    "silent_learned": 0.1,
+    "reopen_same": 0.5,
+    "reopen_opposite": -1,
+    "reopen_opposite_learned": -1.5,
+    "revoke": 0
+  }
+}

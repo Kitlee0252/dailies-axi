@@ -9,10 +9,10 @@ const optionTypes = { string: { type: 'string' }, boolean: { type: 'boolean' }, 
 
 export const commands = {
   open: {
-    usage: 'open <video|composition.html> [workspace-dir] [--asset ID] [--version vN] [--brief TEXT] [--note SUMMARY] [--outcomes FILE] [--language CODE | --srt FILE | --no-transcribe] [--no-poll] [--no-open]',
+    usage: 'open <video|composition.html> [workspace-dir] [--asset ID] [--version vN] [--brief TEXT] [--brief-file FILE] [--note SUMMARY] [--outcomes FILE] [--language CODE | --srt FILE | --no-transcribe] [--no-poll] [--no-open]',
     description: 'Ingest a video or the missing originals in a HyperFrames composition, build the review, open it in Lavish and wait for feedback. Open the workspace’s source/index.html for the next round. Use --no-poll to exit after opening.',
     positionals: [{ path: true }, { path: true, optional: true }],
-    flags: { asset: 'string', version: 'string', brief: 'string', note: 'string', outcomes: 'path', language: 'string', srt: 'path',
+    flags: { asset: 'string', version: 'string', brief: 'string', 'brief-file': 'path', note: 'string', outcomes: 'path', language: 'string', srt: 'path',
       'no-transcribe': 'boolean', 'no-poll': 'boolean', 'no-open': 'boolean' },
   },
   init: {

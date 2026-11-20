@@ -9,11 +9,16 @@ const iframe = $('#composition'), canvas = $('#canvas'), surface = $('#surface')
 const composer = $('#composer'), input = $('#feedback'), seek = $('#seek'), timeline = $('#timeline');
 const { edl, assets, transcripts, version, record } = config;
 let notes = [], locked = false, stateLoaded = false, sent = false;
+const reactions = new Map();
+const reviewers = record.reviewers ?? [];
+let reviewer = reviewers.length === 1 ? reviewers[0].id : 'anonymous';
+const reactionKey = (ref, actor) => `${ref}:${actor}`;
 let port, ready, width, height, fps, frameCount, playing = false, positioned = false;
 let frame = 0, gesture, draft, request = 0, noteCount = 0, range, dragRange;
 $('#version').textContent = version;
 const status = message => { $('#status').textContent = message; };
 const editable = () => ready && stateLoaded && !locked && !sent;
+const hasFeedback = () => notes.length > 0 || reactions.size > 0;
 
 function resize() {
   if (!ready) return;
@@ -242,7 +247,8 @@ composer.onsubmit = event => {
   const spans = mapInterval(edl, assets, draft.frame, draft.end_frame ?? draft.frame + 1);
   const shots = draft.whole_video || !edl.segments.length ? {}
     : { shots: shotSpans(edl, draft.frame, draft.end_frame ?? draft.frame + 1) };
-  const note = withSpoken({ ...draft, id: `N${++noteCount}`, text, ...shots }, spans, transcripts, edl);
+  const note = withSpoken({ ...draft, id: `N${++noteCount}`, text, ...shots,
+    ...(reviewers.length > 1 ? { reviewer } : {}) }, spans, transcripts, edl);
   notes.push(note);
   range = null;
   closeComposer();
@@ -301,9 +307,10 @@ function renderTranscript() {
 function renderNotes() {
   $('#count').textContent = `(${notes.length})`;
   $('#empty').hidden = notes.length > 0;
-  $('#send').disabled = !editable() || !notes.length;
+  $('#send').disabled = !editable() || !hasFeedback();
   $('#note-tools').hidden = !editable();
   $('#send').hidden = locked || sent;
+  $('#reviewer').disabled = !editable();
   surface.classList.toggle('locked', locked || sent);
   $('#notes').replaceChildren(...sortNotes(notes).map(note => {
     const item = document.createElement('li');
@@ -322,6 +329,7 @@ function renderNotes() {
       controls.append(remove);
     }
     item.append(controls, Object.assign(document.createElement('p'), { textContent: note.text }));
+    if (note.reopens) item.append(Object.assign(document.createElement('p'), { textContent: `Reopens ${note.reopens}` }));
     const spoken = note.spoken ?? note.spoken_around;
     if (spoken) item.append(Object.assign(document.createElement('p'), { textContent: `Spoken · ${spoken}` }));
     const resolution = nextVersion?.resolutions[note.id];
@@ -361,6 +369,11 @@ window.reviewState = state => {
       locked = true;
       changed = firstLock;
       notes = state.notes;
+      reviewer = state.reviewer ?? reviewer;
+      $('#reviewer').value = reviewer;
+      reactions.clear();
+      for (const reaction of state.reactions ?? []) reactions.set(
+        reactionKey(reaction.outcome, reaction.reviewer ?? reviewer), reaction);
       if (firstLock) {
         closeComposer();
         status('Feedback locked. This round is read-only.');
@@ -371,7 +384,10 @@ window.reviewState = state => {
     changed = JSON.stringify(state.next) !== JSON.stringify(nextVersion) || changed;
     nextVersion = state.next;
   }
-  if (ready && changed) renderNotes();
+  if (ready && changed) {
+    renderNotes();
+    renderHistory();
+  }
 };
 function refreshState(file) {
   const script = document.createElement('script');
@@ -425,23 +441,91 @@ function renderHistory() {
       };
       row.append(' ', button);
     }
+    if (result) appendOutcomeFeedback(row, `${record.parent}:${note.id}`, result, note);
     return row;
   }));
 }
+
+function appendOutcomeFeedback(row, outcome, result, note) {
+  for (const item of result.learned ?? []) {
+    row.append(Object.assign(document.createElement('p'), {
+      textContent: `${item.layer === 'reviewer' ? 'Based on your preference' : 'Based on an approved general preference'} · ${item.evidence} ${item.undo}`,
+    }));
+  }
+  const key = reactionKey(outcome, reviewer);
+  const selected = reactions.get(key);
+  const choices = [
+    ['Accept', { verdict: 'accept' }], ['Reject', { verdict: 'reject' }],
+    ...(result.alternatives ?? []).map(alt => [
+      `Choose ${alt.id}${alt.label ? ` · ${alt.label}` : alt.value !== undefined ? ` · ${alt.value}` :
+        alt.treatment ? ` · ${alt.treatment}` : alt.direction ? ` · ${alt.direction}` : ''}`,
+      { choice: alt.id },
+    ]),
+  ];
+  if (editable()) {
+    const controls = Object.assign(document.createElement('div'), { className: 'row outcome-feedback' });
+    for (const [label, signal] of choices) {
+      const button = Object.assign(document.createElement('button'), { type: 'button', textContent: label });
+      const pressed = Object.entries(signal).every(([key, value]) => selected?.[key] === value);
+      button.setAttribute('aria-pressed', pressed);
+      button.onclick = () => {
+        if (!editable()) return;
+        const wasPressed = button.getAttribute('aria-pressed') === 'true';
+        if (wasPressed) reactions.delete(key);
+        else reactions.set(key, { outcome, ...signal, ...(reviewers.length > 1 ? { reviewer } : {}) });
+        for (const other of controls.querySelectorAll('button[aria-pressed]')) {
+          other.setAttribute('aria-pressed', !wasPressed && other === button);
+        }
+        renderNotes();
+      };
+      controls.append(button);
+    }
+    const reopen = Object.assign(document.createElement('button'), { type: 'button', textContent: `Reopen ${outcome}` });
+    reopen.onclick = () => {
+      if (!editable()) return;
+      if (note.whole_video) {
+        openComposer({ kind: 'general', frame: 0, end_frame: frameCount, whole_video: true, reopens: outcome });
+      } else {
+        const [start, end] = outcomeTargets(result)[0] ?? [frame];
+        seekFrame(start);
+        openComposer({ kind: 'range', frame: start, end_frame: end ?? start + 1, reopens: outcome });
+      }
+    };
+    controls.append(reopen);
+    row.append(controls);
+  } else if (selected) {
+    row.append(Object.assign(document.createElement('p'), {
+      textContent: selected.choice ? `Selected ${selected.choice}` : selected.verdict === 'accept' ? 'Accepted' : 'Rejected',
+    }));
+  }
+}
+
+const identity = $('#reviewer');
+identity.replaceChildren(...[{ id: 'anonymous', role: 'Anonymous' }, ...reviewers].map(item =>
+  new Option(item.role || item.id, item.id)));
+identity.value = reviewer;
+identity.onchange = () => {
+  if (!editable()) return;
+  reviewer = identity.value;
+  renderHistory();
+};
+$('#reviewer-field').hidden = reviewers.length < 2;
 renderHistory();
 
 $('#send').onclick = async () => {
-  if (!editable() || !notes.length) return;
+  if (!editable() || !hasFeedback()) return;
   if (!window.lavish?.queuePrompt || !window.lavish?.sendQueuedPrompts) return status('Open with lavish-axi to send feedback.');
   const batch = structuredClone(sortNotes(notes));
+  const response = [...reactions.values()];
   sent = true;
   closeComposer();
   renderNotes();
+  renderHistory();
   try {
-    await window.lavish.queuePrompt(feedbackPrompt(version, batch), { tag: 'video-review',
-      text: `${batch.length} note(s) for ${version}`, queueKey: `region-review-${version}`,
-      data: { schema_version: 2, version, composition: 'composition/index.html',
-        width, height, fps, frame_count: frameCount, notes: batch } });
+    await window.lavish.queuePrompt(feedbackPrompt(version, batch, response), { tag: 'video-review',
+      text: `${batch.length} note(s), ${response.length} reaction(s) for ${version}`, queueKey: `region-review-${version}`,
+      data: { schema_version: 3, version, composition: 'composition/index.html',
+        width, height, fps, frame_count: frameCount, reviewer, reactions: response, notes: batch } });
     const result = await window.lavish.sendQueuedPrompts();
     if (result === false || result?.ok === false) throw new Error('Lavish rejected this batch');
     if (!locked) status('Submitted to Lavish. Waiting for the agent’s poll to lock this round.');
@@ -449,6 +533,7 @@ $('#send').onclick = async () => {
     sent = false;
     status('Could not send. Notes are still here. Try again.');
     renderNotes();
+    renderHistory();
   }
 };
 

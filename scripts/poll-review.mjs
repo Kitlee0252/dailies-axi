@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 import { access, readFile, readdir } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
 import { decode, encode } from '@toon-format/toon';
-import { lockNotes, projectState, readNotes } from './notes.mjs';
+import { lockNotes, notesState, projectState, readNotes } from './notes.mjs';
 
 const [file, ...args] = process.argv.slice(2);
 if (!file || basename(file) !== 'review.html') {
@@ -18,7 +18,7 @@ const latest = async () => (await readdir(root, { withFileTypes: true }))
 if (version !== await latest()) throw new Error('Only the latest version can be polled for video feedback');
 const existing = await readNotes(folder);
 if (existing) {
-  await projectState(folder, 'notes.js', { notes: existing.notes, sentAt: existing.sentAt });
+  await projectState(folder, 'notes.js', notesState(existing));
   console.log(JSON.stringify({ ...existing, feedback: await handoff(existing) }, null, 2));
 } else {
   const child = spawn('lavish-axi', ['poll', path, '--owner', 'video-review', ...args],
@@ -73,9 +73,10 @@ async function handoff(record) {
   const buildArgs = defaultRoot ? next : `${next} ${quote(root)}`;
   const reviewArg = defaultRoot ? next : quote(join(root, next, 'review.html'));
   return {
-    version, notes: record.notes.length, notes_file: join(folder, 'notes.json'), edl: join(folder, 'edl.json'),
+    version, notes: record.notes.length, reactions: record.reactions?.length ?? 0,
+    notes_file: join(folder, 'notes.json'), edl: join(folder, 'edl.json'),
     ...(transcripts.length ? { transcripts } : {}), ...(hasComposition ? { composition } : {}),
-    next_step: `For footage edits, use the dailies-edit skill. From ${quote(workspace)}, run dailies-cut plan ${version}${reviewRootArg}. ` +
+    next_step: `For footage edits, use the dailies-edit skill. From ${quote(workspace)}, run dailies-cut learn ingest --round ${version}${reviewRootArg}, then dailies-cut plan ${version}${reviewRootArg}. ` +
       'Inspect the evidence, fill ops.json, then use dailies-cut apply, verify and select. ' +
       `Build the chosen version with dailies-axi build ${buildArgs} --note "<summary>" --outcomes <verified changes.json>, ` +
       `then run dailies-axi review ${reviewArg}. For author-controlled graphics or animation notes, inspect the working composition and use the legacy outcomes format when it has no managed cut.`,

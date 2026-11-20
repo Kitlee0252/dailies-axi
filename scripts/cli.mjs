@@ -5,6 +5,7 @@ import { basename, dirname, extname, join } from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { fileURLToPath } from 'node:url';
 import { decode, encode } from '@toon-format/toon';
+import { readBrief, validateBrief } from './brief.mjs';
 import { buildReview } from './build-review.mjs';
 import { commands, isCompositionFile, parseCommand } from './cli-args.mjs';
 import { compositionSources, parseComposition, relocateComposition } from './composition.mjs';
@@ -90,7 +91,7 @@ async function build(args, options, file) {
     }
     options = { ...options, composition: contents === undefined ? samplePath : file };
   }
-  await buildReview([...args, ...flags(options)]);
+  await buildReview([...args, ...flags({ ...options, workspace: dirname(dirname(file)) })]);
   const review_file = join(root, version, 'review.html');
   const { fps, frame_count, segments } = JSON.parse(await readFile(join(root, version, 'edl.json'), 'utf8'));
   return { version, review_file, fps, frame_count,
@@ -169,7 +170,12 @@ async function createWorkspace(workspace) {
   }
 }
 
-async function captureBrief(workspace, supplied, initial) {
+async function captureBrief(workspace, supplied, initial, structured) {
+  if (structured) {
+    if (!initial || await readBrief(workspace)) throw new Error('Set --brief-file once on the initial open');
+    await writeFile(join(workspace, 'brief.json'), JSON.stringify(structured, null, 2) + '\n', { flag: 'wx', mode: 0o600 });
+    if (supplied === undefined) return { status: 'recorded', file: join(workspace, 'brief.json') };
+  }
   const file = join(workspace, 'brief.md');
   try {
     const text = await readFile(file, 'utf8');
@@ -193,11 +199,12 @@ async function captureBrief(workspace, supplied, initial) {
 }
 
 async function openVideo(video, workspace, options) {
+  const structured = options['brief-file'] && validateBrief(JSON.parse(await readFile(options['brief-file'], 'utf8')));
   if (!(await stat(video)).isFile()) throw new Error(`Not a video file: ${video}`);
   await createWorkspace(workspace);
 
   await initWorkspace(workspace);
-  const brief = await captureBrief(workspace, options.brief, true);
+  const brief = await captureBrief(workspace, options.brief, true, structured);
   const file = compositionPath(workspace);
   const media = join(workspace, 'media');
   const { asset, version } = options;
@@ -207,6 +214,7 @@ async function openVideo(video, workspace, options) {
 }
 
 async function openComposition(input, destination, options) {
+  const structured = options['brief-file'] && validateBrief(JSON.parse(await readFile(options['brief-file'], 'utf8')));
   const parent = dirname(dirname(input));
   const isWorkingFile = input === compositionPath(parent);
   const workspace = destination ?? (isWorkingFile ? parent :
@@ -220,6 +228,7 @@ async function openComposition(input, destination, options) {
   const media = join(workspace, 'media');
   const root = join(workspace, 'review');
   const latest = await latestVersion(root);
+  if (latest && structured) throw new Error('Set --brief-file once on the initial open');
   const version = options.version ?? `v${latest + 1}`;
   if (latest && version !== `v${latest + 1}`) {
     throw new Error(`Build the next version in order (v${latest + 1}); existing versions are immutable`);
@@ -245,7 +254,7 @@ async function openComposition(input, destination, options) {
     await writeFile(file, relocateComposition(original, document, input), { flag: 'wx' });
   }
 
-  const brief = await captureBrief(workspace, options.brief, !latest);
+  const brief = await captureBrief(workspace, options.brief, !latest, structured);
   const ingested = [];
   for (const [asset, source] of missing) {
     const { transcript } = await ingest([source, asset], { ...options, media, fps: document.fps }, file);

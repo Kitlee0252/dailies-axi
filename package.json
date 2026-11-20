@@ -15,7 +15,11 @@
   "files": [
     "composition/",
     "scripts/",
-    "!scripts/*.test.mjs",
+    "!scripts/cli.test.mjs",
+    "!scripts/footage.test.mjs",
+    "!scripts/regions.test.mjs",
+    "!scripts/learning-workflow.test.mjs",
+    "docs/",
     "skills/",
     "plugin.json",
     "THIRD_PARTY_NOTICES.md",

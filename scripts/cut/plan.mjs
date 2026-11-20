@@ -5,7 +5,7 @@ import { extractFrame, waveform } from './media.mjs';
 import { reviewedSpans, schema } from './model.mjs';
 import { snapBoundary } from './operations.mjs';
 
-export async function makePlan({ workspace, media, version, edl, notes, assets, analysis, brief, batch }) {
+export async function makePlan({ workspace, media, version, edl, notes, assets, analysis, brief, batch, learningPlan }) {
   const dir = join(workspace, 'cut-plans', version);
   const evidence = join(dir, 'evidence');
   await mkdir(evidence, { recursive: true, mode: 0o700 });
@@ -45,6 +45,7 @@ export async function makePlan({ workspace, media, version, edl, notes, assets, 
   const file = join(dir, 'ops.draft.json');
   const languages = [...new Set(Object.values(analysis).map(item => item.speech?.language).filter(Boolean))];
   await writeJson(file, { schema_version: schema, from: version, batch, brief,
-    language: languages.length === 1 ? languages[0] : 'zh', notes: entries, ops: [] });
+    language: languages.length === 1 ? languages[0] : 'zh', notes: entries, ops: [],
+    ...(learningPlan ? { learning: { params_version: learningPlan.params_version, entries: learningPlan.entries } } : {}) });
   return { file, evidence, notes: entries.length };
 }

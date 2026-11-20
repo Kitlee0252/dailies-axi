@@ -1,6 +1,7 @@
 import { checkSpan, elementId, locateAnchor, nextVersion, placed, requireSchema, reviewedSpans,
   schema, sourceFrameAfter, validateCut } from './model.mjs';
 import { byAsset, difference, intersection, length, overlaps, subtract, union } from './ranges.mjs';
+import { outcomeMetadata } from '../outcomes.mjs';
 
 const SNAP_RADIUS = 6;
 const MIN_PAD_SECONDS = 0.03;
@@ -152,18 +153,23 @@ function makeDecisions(cut, edl, notes, ops, assets, analysis) {
     }
     const { note: id, op: type, intent, authority, scope, scope_reason } = op;
     return { note: id, op: type, intent, authority, scope,
-      ...(scope_reason ? { scope_reason } : {}), ...details };
+      ...(scope_reason ? { scope_reason } : {}), ...(op.basis ? { basis: op.basis } : {}), ...details };
   });
 }
 
-function outcomesFor(notes, decisions, before, cut, anchorLosses) {
+function outcomesFor(notes, decisions, before, cut, anchorLosses, metadata = {}) {
+  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata) ||
+    Object.keys(metadata).some(id => !notes.some(note => note.id === id))) throw new Error('Outcome metadata must use locked note IDs');
   const direct = byAsset(decisions.filter(item => item.op !== 'tighten').flatMap(item => item.removed ?? []));
   return Object.fromEntries(notes.map(note => {
     const items = decisions.filter(item => item.note === note.id);
     const frames = [];
     const messages = [];
     let status = 'applied';
-    if (!items.length) return [note.id, { status: 'pending', note: 'Awaiting an edit decision.', frames }];
+    const details = Object.hasOwn(metadata, note.id) ? metadata[note.id] : {};
+    const extra = outcomeMetadata(details);
+    if (details.note !== undefined && !nonempty(details.note)) throw new Error('Outcome explanation must be non-empty text');
+    if (!items.length) return [note.id, { status: 'pending', note: details.note ?? 'Awaiting an edit decision.', frames, ...extra }];
     for (const item of items) {
       messages.push(item.deferred ?? item.intent);
       if (item.scope_reason) messages.push(item.scope_reason);
@@ -193,7 +199,8 @@ function outcomesFor(notes, decisions, before, cut, anchorLosses) {
       status = 'anchor-lost';
       if (!items.some(item => item.overlay?.element === loss.element)) messages.push(`Anchor lost for #${loss.element}.`);
     }
-    return [note.id, { status, note: messages.join(' '), frames: union(frames) }];
+    if (details.note) messages.push(details.note);
+    return [note.id, { status, note: messages.join(' '), frames: union(frames), ...extra }];
   }));
 }
 
@@ -241,9 +248,13 @@ export function applyOperations(cut, edl, notes, input, assets, analysis) {
   const version = nextVersion(input.from);
   const next = { schema_version: schema, version, fps: cut.fps, segments, overlays, protected: protectedSpans };
   const timeline = placed(segments);
+  const outcomeNotes = notes.filter(note => !note.generated || decisions.some(op => op.note === note.id));
   const changes = { schema_version: schema, kind: 'dailies-cut-changes', from: input.from, to: version,
     frame_count: timeline.at(-1).output[1], removed, added,
     splice_points: timeline.slice(1).map(segment => segment.output[0]),
-    operations: decisions, anchor_losses: anchorLosses, outcomes: outcomesFor(notes, decisions, cut, next, anchorLosses) };
+    operations: decisions, anchor_losses: anchorLosses, outcomes: outcomesFor(outcomeNotes, decisions, cut, next, anchorLosses, input.outcomes) };
+  const generated = outcomeNotes.filter(note => note.generated)
+    .map(({ id, text, whole_video }) => ({ id, text, whole_video }));
+  if (generated.length) changes.generated_notes = generated;
   return { cut: next, changes };
 }

@@ -5,14 +5,19 @@ import { isDeepStrictEqual } from 'node:util';
 import { compositionEdl } from '../composition-edl.mjs';
 import { readManifest, sha256, writeJson } from '../manifest.mjs';
 import { compositionPath, latestVersion } from '../workspace.mjs';
+import { supportedNotes } from '../notes.mjs';
 import { analyzeAssets } from './analyze.mjs';
 import { readJson, readOptional, withLock, writeText } from './files.mjs';
 import { alignComposition } from './generate.mjs';
-import { cutFromEdl, edlSegments, nextVersion, requireSchema, sameFootage, schema } from './model.mjs';
+import { cutFromEdl, edlSegments, nextVersion, requireSchema, reviewedSpans, sameFootage, schema } from './model.mjs';
 import { applyOperations } from './operations.mjs';
 import { makePlan } from './plan.mjs';
 import { inspectEdit } from './verify-edit.mjs';
 import { verifyRenders } from './verify-render.mjs';
+import { readEvents, readLearning, readProjectEvents, settingsFor } from './learning-store.mjs';
+import { learnedBasis, projectDecisions } from './learning-plan.mjs';
+import { evaluate } from './learning-rules.mjs';
+import { learningErrors } from './learning-verify.mjs';
 
 const candidateId = /^[a-zA-Z0-9][\w-]*$/;
 
@@ -27,23 +32,24 @@ async function lockedRound(workspace, reviewRoot, version) {
   const media = join(folder, 'media');
   const notesPath = join(folder, 'notes.json');
   const edlPath = join(folder, 'edl.json');
-  const [record, edl, manifest, brief, notesHash, edlHash, reviewed] = await Promise.all([
+  const [record, edl, manifest, brief, notesHash, edlHash, reviewed, learningPlan] = await Promise.all([
     readJson(notesPath), readJson(edlPath), readManifest(media),
     readFile(join(workspace, 'brief.md'), 'utf8').catch(error => {
       if (error.code !== 'ENOENT') throw error;
       return '';
     }), sha256(notesPath), sha256(edlPath), readJson(join(folder, 'version.json')),
+    readOptional(join(workspace, 'learning', `plan-${version}.json`)),
   ]);
-  requireSchema(record, 'notes.json', 2);
-  if (record.version !== version || reviewed.version !== version || !record.batch?.id || !Array.isArray(record.notes)) {
+  if (!supportedNotes(record) || record.version !== version || reviewed.version !== version || !record.batch?.id || !Array.isArray(record.notes)) {
     throw new Error('Plan against a locked review batch');
   }
   const { assets } = manifest;
   const cache = join(workspace, 'media');
   await mkdir(cache, { recursive: true, mode: 0o700 });
   const analysis = await analyzeAssets(media, assets, cache);
+  const generated = (learningPlan?.generated_notes ?? []).map(note => ({ ...note, generated: true }));
   return { workspace, reviewRoot, version, edl, media, brief: brief.trim(), reviewed,
-    assets, analysis, notes: record.notes, batch: record.batch.id, notesHash, edlHash };
+    assets, analysis, notes: [...record.notes, ...generated], learningPlan, batch: record.batch.id, notesHash, edlHash };
 }
 
 function frozenInputs(round) {
@@ -55,6 +61,38 @@ function frozenInputs(round) {
 export async function plan(workspace, reviewRoot, version) {
   const round = await lockedRound(workspace, reviewRoot, version);
   return makePlan(round);
+}
+
+async function inspectLearning(round, input, changes) {
+  const store = await readLearning(round.workspace);
+  const local = await readProjectEvents(store);
+  const plan = round.learningPlan;
+  const anchors = new Map(round.notes.map(note => [note.id, reviewedSpans(round.edl, note)]));
+  const errors = learningErrors({ ops: input.ops, changes, plan, version: round.version, anchors,
+    current: local.filter(e => e.round === round.version),
+    decisions: projectDecisions(local, store.brief), planRequired: true });
+  const reviewerOps = input.ops.filter(op => op.basis?.layer === 'reviewer' &&
+    !['ask', 'decline'].includes(op.op) && learnedBasis(op.basis));
+  if (!reviewerOps.length) return errors;
+  const [{ global }, globalSettings] = await Promise.all([
+    readEvents(store), readOptional(join(store.home, 'settings.json')),
+  ]);
+  const paused = process.env.DAILIES_LEARN === 'off' || store.brief?.learning?.enabled === false ||
+    globalSettings?.paused;
+  const now = Date.now();
+  const generated = new Set((plan?.generated_notes ?? []).map(note => note.id));
+  for (const op of reviewerOps) {
+    if (typeof op.basis.pref !== 'string') continue;
+    const settings = await settingsFor(store, op.basis.pref.split('|')[0]);
+    const pref = evaluate(global, now, op.basis.pref);
+    const eligible = { default: ['active'], suggest: ['candidate', 'active'], contested: ['contested'] };
+    if (paused || settings.paused || !eligible[op.basis.mode]?.includes(pref.status) ||
+      (generated.has(op.note) && !settings.auto_apply)) {
+      errors.push({ check: 'C-learn', code: 'stale-learning-plan', note: op.note,
+        message: 'The preference changed or was paused. Run learn plan again before applying it.' });
+    }
+  }
+  return errors;
 }
 
 async function present(file) {
@@ -161,6 +199,7 @@ export async function verify(workspace, name, { mode, edlOnly, composition } = {
       const actual = compositionEdl(html, round.assets);
       edit = inspectEdit({ base: round.edl, actual, html, cut, changes, analysis: round.analysis, assets: round.assets });
       errors.push(...edit.errors);
+      errors.push(...await inspectLearning(round, input, changes));
       if (!edlOnly && (!errors.length || composition)) {
         render = await verifyRenders({ dir: composition ? await diagnosticDir(dir) : dir, html, edl: actual,
           assets: round.assets, media: round.media, edit, input, mode });
@@ -196,7 +235,7 @@ async function diagnosticDir(dir) {
 export async function select(workspace, name) {
   const dir = candidatePath(workspace, name);
   return withLock(join(workspace, '.dailies-cut-lock'), () => withLock(join(dir, '.verify-lock'), async () => {
-    const { context, cut, round } = await readCandidate(workspace, name);
+    const { context, cut, round, input, changes } = await readCandidate(workspace, name);
     const index = join(dir, 'index.html');
     const verifyRecord = await readOptional(join(dir, 'verify.json'));
     if (!verifyRecord?.passed || !['full', 'windows'].includes(verifyRecord.coverage)) {
@@ -210,6 +249,8 @@ export async function select(workspace, name) {
     if (Number(context.from.slice(1)) !== await latestVersion(context.review_root)) {
       throw new Error('The reviewed version advanced; select from the latest round');
     }
+    const learning = await inspectLearning(round, input, changes);
+    if (learning.length) throw new Error(learning.map(error => error.message).join(' '));
     const source = compositionPath(workspace);
     const workingHash = await sha256(source);
     if (workingHash !== context.source_sha256 && workingHash !== hashes.composition_sha256) {

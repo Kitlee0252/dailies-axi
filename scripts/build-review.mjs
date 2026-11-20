@@ -8,18 +8,19 @@ import { createRequire } from 'node:module';
 import { parseArgs } from 'node:util';
 import { documentEdl } from './composition-edl.mjs';
 import { compositionSources, normalizeComposition, parseComposition } from './composition.mjs';
-import { resolveOutcomes } from './outcomes.mjs';
+import { outcomeNotes, resolveOutcomes } from './outcomes.mjs';
 import { readReviewProof } from './review-proof.mjs';
 import { latestVersion } from './workspace.mjs';
 import { readManifest, sha256, writeJson } from './manifest.mjs';
 import { projectState, readNotes } from './notes.mjs';
+import { readBrief } from './brief.mjs';
 
 export async function buildReview(args) {
   const { positionals: [version, outputRoot = 'review', extra], values } = parseArgs({
     args,
     allowPositionals: true, options: {
       composition: { type: 'string' }, media: { type: 'string', default: 'media' },
-      note: { type: 'string', default: '' }, outcomes: { type: 'string' },
+      note: { type: 'string', default: '' }, outcomes: { type: 'string' }, workspace: { type: 'string' },
       'initial-version': { type: 'boolean' },
     },
   });
@@ -79,10 +80,12 @@ export async function buildReview(args) {
     const outcomesText = values.outcomes ? await readFile(resolve(values.outcomes), 'utf8') : '{}';
     const outcomes = JSON.parse(outcomesText);
     const resolutions = resolveOutcomes(outcomes, previous, version, edl.frame_count);
+    const brief = await readBrief(values.workspace ?? dirname(root));
     const proof = await readReviewProof({ html: authorHtml, outcomes, outcomesText, file: values.outcomes,
       parentFolder: parent ? join(root, parent) : undefined, media: dir,
       assets: Object.keys(assets), frameCount: edl.frame_count, fps: edl.fps });
     const record = { version, parent, note: values.note, resolutions,
+      ...(brief ? { reviewers: brief.reviewers } : {}),
       ...(proof ? { cut_sha256: proof.cut_sha256, verification_coverage: proof.verification_coverage } : {}) };
     const inline = code => `<script>${code.replace(/<\/script/gi, '<\\/script')}</script>`;
     const classic = code => code.replace(/^import .*;\n/gm, '').replace(/^export /gm, '');
@@ -90,7 +93,7 @@ export async function buildReview(args) {
       .replace('</body>', () => `${inline(runtimeBanner + runtime)}${inline(classic(regions) + '\n' + bridge)}</body>`);
     const browserAssets = Object.fromEntries(Object.entries(assets).map(([id, { source, ...asset }]) => [id, asset]));
     const config = JSON.stringify({ version, liveComposition, edl, assets: browserAssets, transcripts, record,
-      previousNotes: previous?.notes.map(({ id, text }) => ({ id, text })) ?? [] }).replace(/</g, '\\u003c');
+      previousNotes: outcomeNotes(outcomes, previous).map(({ id, text, whole_video }) => ({ id, text, whole_video })) }).replace(/</g, '\\u003c');
     const code = [regions, edlCode, transcriptCode, spokenCode, feedbackCode, review].map(classic).join('\n');
     const page = template.replace('<!-- REVIEW_SCRIPT -->', () => inline(`const config = ${config};\n${code}`));
 
@@ -115,6 +118,7 @@ export async function buildReview(args) {
       }
     }
     await writeJson(join(stage, 'version.json'), record);
+    if (proof) await writeFile(join(stage, 'changes.json'), outcomesText, { mode: 0o600 });
     await writeJson(join(stage, 'edl.json'), edl);
     await projectState(stage, 'notes.js', { notes: null });
     await projectState(stage, 'next.js', { next: null });
