@@ -34,12 +34,12 @@ export async function buildReview(args) {
   const runtimePath = join(dirname(require.resolve('hyperframes/package.json')), 'dist', 'hyperframe.runtime.iife.js');
   const gsapBanner = '/*! GSAP 3.15.1 — GreenSock Standard License — https://gsap.com/standard-license/ */\n';
   const runtimeBanner = '/*! HyperFrames 0.9.69 — Apache-2.0 — https://github.com/heygen-com/hyperframes */\n';
-  const [authorHtml, gsap, runtime, template, regions, review, bridge, edlCode, transcriptCode, spokenCode, feedbackCode] =
+  const [authorHtml, gsap, runtime, template, regions, review, bridge, edlCode, transcriptCode, spokenCode, feedbackCode, selectionCode] =
     await Promise.all([
       values.composition ? readFile(resolve(values.composition), 'utf8') : text('composition/index.html'),
       readFile(gsapPath, 'utf8'), readFile(runtimePath, 'utf8'), text('scripts/review.html'),
       text('scripts/regions.mjs'), text('scripts/review.mjs'), text('scripts/composition-bridge.js'), text('scripts/edl.mjs'),
-      text('scripts/transcript.mjs'), text('scripts/spoken.mjs'), text('scripts/feedback-format.mjs'),
+      text('scripts/transcript.mjs'), text('scripts/spoken.mjs'), text('scripts/feedback-format.mjs'), text('scripts/review-selection.mjs'),
     ]);
 
   const dir = resolve(values.media);
@@ -94,7 +94,7 @@ export async function buildReview(args) {
     const browserAssets = Object.fromEntries(Object.entries(assets).map(([id, { source, ...asset }]) => [id, asset]));
     const config = JSON.stringify({ version, liveComposition, edl, assets: browserAssets, transcripts, record,
       previousNotes: outcomeNotes(outcomes, previous).map(({ id, text, whole_video }) => ({ id, text, whole_video })) }).replace(/</g, '\\u003c');
-    const code = [regions, edlCode, transcriptCode, spokenCode, feedbackCode, review].map(classic).join('\n');
+    const code = [regions, edlCode, transcriptCode, spokenCode, feedbackCode, selectionCode, review].map(classic).join('\n');
     const page = template.replace('<!-- REVIEW_SCRIPT -->', () => inline(`const config = ${config};\n${code}`));
 
     stage = await mkdtemp(join(root, '.build-'));

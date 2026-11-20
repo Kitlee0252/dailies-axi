@@ -252,6 +252,31 @@ test('ingest records hard cuts and the next version posts its link in the previo
   assert.equal((await readFile(join(cwd, 'replies.log'), 'utf8')).trim().split('\n').length, 1);
 });
 
+test('review and cut analysis agree on all five-shot fixture boundaries, including similar luminance', async t => {
+  const cwd = await mkdtemp(join(tmpdir(), 'dailies-color-cuts-'));
+  t.after(() => rm(cwd, { recursive: true, force: true }));
+  // Picture track of make-rough-cut.sh, without the platform-specific TTS.
+  const colors = ['4979be', 'c556a9', '519b62', '89a039', '7236ca'];
+  const frames = [132, 160, 138, 150, 58];
+  const inputs = colors.map((color, i) =>
+    `color=c=0x${color}:s=96x64:r=30,trim=end_frame=${frames[i]}[v${i}]`);
+  const concat = colors.map((_, i) => `[v${i}]`).join('') + 'concat=n=5:v=1:a=0';
+  const source = join(cwd, 'rough.mp4');
+  const generated = spawnSync('ffmpeg', ['-v', 'error', '-f', 'lavfi', '-i', [...inputs, concat].join(';'),
+    '-c:v', 'libx264', source], { encoding: 'utf8' });
+  assert.equal(generated.status, 0, generated.stderr);
+  const ingested = run(cwd, 'ingest', source, 'cut', '--no-transcribe');
+  assert.equal(ingested.status, 0, ingested.stderr);
+  const manifest = JSON.parse(await readFile(join(cwd, 'media', 'manifest.json'), 'utf8'));
+  assert.deepEqual(manifest.assets.cut.scene_cuts, [132, 292, 430, 580]);
+
+  const cutBin = fileURLToPath(new URL('./cut-cli.mjs', import.meta.url));
+  const analyzed = spawnSync(process.execPath, [cutBin, 'analyze', 'cut'], { cwd, encoding: 'utf8' });
+  assert.equal(analyzed.status, 0, analyzed.stderr);
+  const cache = JSON.parse(await readFile(join(cwd, 'media', 'cut.analysis.json'), 'utf8'));
+  assert.deepEqual(cache.visual_cuts, [132, 292, 430, 580]);
+});
+
 test('open ingests two composition originals, reuses them in v2 and snapshots exact outcome frames', { timeout: 20000 }, async t => {
   const { cwd, env } = await openFixture(t);
   const input = join(cwd, 'edit.htm');

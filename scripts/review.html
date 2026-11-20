@@ -18,6 +18,10 @@
     #surface, #markers { position: absolute; inset: 0 }
     #surface { cursor: crosshair; touch-action: none }
     #markers { pointer-events: none }
+    #transcript-overlay { position: absolute; top: 4%; left: 50%; transform: translateX(-50%); width: max-content;
+      max-width: 92%; padding: 6px 10px; border-radius: 6px; background: #11111be8; color: #fff;
+      text-align: center; font-size: clamp(.76rem, 2.5vw, 1.1rem); overflow-wrap: anywhere; pointer-events: none }
+    #transcript-overlay b { color: var(--mint); font-size: .75em; margin-right: .4em }
     .region { position: absolute; border: 2px solid var(--mint); background: #b8f3d822 }
     .region b { position: absolute; left: 0; top: 0; background: var(--mint); color: #131824; font: bold 12px system-ui; padding: 1px 5px }
     #composer { margin: 10px auto; z-index: 1; width: min(330px, calc(100% - 16px)); padding: 12px; border: 1px solid var(--line); border-radius: 9px; background: #211d30; box-shadow: 0 8px 32px #0009 }
@@ -29,12 +33,18 @@
     .noted-span { background: #8cb4bf }
     .selected-span { background: #b8f3d8 }
     #timeline .cut-mark { top: -3px; bottom: -3px; width: 2px; margin-left: -1px; background: #ffda72 }
+    #timeline .playhead { top: 0; bottom: 0; width: 2px; margin-left: -1px; background: #fff; box-shadow: 0 0 0 1px #11111b }
+    #clear-range { margin: 8px 0 0; padding: 4px 10px; background: var(--mint); color: #131824;
+      border-color: var(--mint); border-radius: 16px; font-weight: 700; font-variant-numeric: tabular-nums }
     #note-tools { margin: 10px 0 14px }
     #note-tools .row { margin-top: 8px }
     #note-tools input { width: 6em }
     #source-frame { font-size: .85rem }
     #transcript { margin: 12px 0 }
-    #words { max-height: 11em; overflow: auto }
+    #words { display: grid; gap: 4px; max-height: 11em; overflow: auto; padding: 2px 4px }
+    #words button { text-align: left }
+    #words .in-range { background: #315347; border-color: #5a9077 }
+    #words [aria-current="true"] { box-shadow: inset 3px 0 var(--mint); color: var(--mint); border-color: var(--mint) }
     #stage { position: relative }
     button, textarea, input, select { font: inherit }
     button { border: 1px solid var(--line); border-radius: 6px; padding: 7px 11px; background: #262236; color: inherit; cursor: pointer }
@@ -64,6 +74,7 @@
   <div id="stage">
     <div id="canvas">
       <iframe id="composition" title="Live HyperFrames composition" sandbox="allow-scripts" tabindex="-1"></iframe>
+      <div id="transcript-overlay" hidden><b>Transcript</b> <span id="overlay-text"></span></div>
       <div id="markers" aria-hidden="true"></div>
       <div id="surface" data-lavish-action></div>
     </div>
@@ -80,22 +91,25 @@
     <button id="next" aria-label="Next frame" disabled>+1</button>
     <input id="seek" type="range" min="0" max="0" value="0" aria-label="Frame" disabled>
     <output id="time" for="seek"></output>
+    <button id="toggle-transcript" type="button" aria-pressed="false" aria-controls="transcript-overlay" hidden>Transcript overlay</button>
   </div>
   <p id="source-frame"></p>
-  <div id="timeline" hidden data-lavish-action aria-label="Drag to select a range"></div>
+  <div id="timeline" hidden tabindex="0" data-lavish-action aria-label="Review timeline. Click to jump or drag to select a range."></div>
+  <button id="clear-range" type="button" title="Clear range (Esc). End frame is excluded." aria-keyshortcuts="Escape" hidden>
+    <span id="range-label"></span> <span aria-hidden="true">✕</span>
+  </button>
   <section id="note-tools" hidden>
     <div class="row">
       <label>Start frame <input id="range-start" type="number" min="0" step="1"></label>
       <label>End frame (excluded) <input id="range-end" type="number" min="1" step="1"></label>
-      <button id="clear-range">Clear range</button>
       <button id="add-range">Add range note</button>
       <button id="whole" aria-keyshortcuts="W">Whole video</button>
     </div>
   </section>
   <details id="transcript" open hidden>
     <summary>Transcript</summary>
-    <p>Select a line to jump to it. Shift-click selects its range.</p>
-    <div id="words" class="row"></div>
+    <p>Click a line to jump and clear the range. Shift-click to select or extend a range.</p>
+    <div id="words"></div>
   </details>
   <details id="history" open hidden>
     <summary>Previous round</summary>

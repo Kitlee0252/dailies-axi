@@ -18,6 +18,7 @@
     "!scripts/cli.test.mjs",
     "!scripts/footage.test.mjs",
     "!scripts/regions.test.mjs",
+    "!scripts/review-selection.test.mjs",
     "!scripts/learning-workflow.test.mjs",
     "docs/",
     "skills/",

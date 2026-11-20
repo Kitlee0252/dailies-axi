@@ -3,11 +3,9 @@ import { mkdir, mkdtemp, rm, rename } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { parseArgs, promisify } from 'node:util';
 import { frameRate, mapFrames, readManifest, sha256, writeJson } from './manifest.mjs';
+import { picture } from './cut/media.mjs';
 
 const run = promisify(execFile);
-// FFmpeg scene scores run from 0 to 1. Hard cuts between similar flat shots can
-// score near 0.2, while camera motion usually stays under 0.1.
-const SCENE_THRESHOLD = 0.15;
 const probe = async (file, args) => JSON.parse((await run('ffprobe',
   ['-v', 'error', ...args, '-of', 'json', file], { maxBuffer: 64 * 1024 * 1024 })).stdout);
 const { positionals: [file, id, extra], values } = parseArgs({
@@ -64,11 +62,8 @@ try {
   const proxyToSource = mapFrames(sourcePts, timeBase, fps, count);
   // Hard cuts in the proxy let reviewers and agents work shot by shot. A
   // rendered rough cut carries no edit list, so detect them from the picture.
-  const { stdout: scenes } = await run('ffmpeg', ['-v', 'error', '-i', output, '-an', '-vf',
-    `scale=160:-2,select='gt(scene,${SCENE_THRESHOLD})',metadata=print:file=-`, '-f', 'null', '-'],
-    { maxBuffer: 64 * 1024 * 1024 });
-  const sceneCuts = [...new Set([...scenes.matchAll(/pts_time:(\d+(?:\.\d+)?)/g)]
-    .map(match => Math.round(Number(match[1]) * fps)))].filter(frame => frame > 0 && frame < count);
+  const { visual_cuts: sceneCuts, frame_count: decodedCount } = await picture(output);
+  if (decodedCount !== count) throw new Error('Decoded proxy frame count differs from its metadata');
   const name = `${id}.mp4`;
   if (await sha256(source) !== digest) throw new Error('Source changed during ingest');
   manifest.assets[id] = {

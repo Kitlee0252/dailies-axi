@@ -3,10 +3,13 @@ import { mapInterval, shotSpans, snapToCut } from './edl.mjs';
 import { commentAt, feedbackPrompt, sortNotes } from './feedback-format.mjs';
 import { transcriptCues, withSpoken } from './spoken.mjs';
 import { joinWords } from './transcript.mjs';
+import { updateSelection } from './review-selection.mjs';
 
 const $ = selector => document.querySelector(selector);
 const iframe = $('#composition'), canvas = $('#canvas'), surface = $('#surface');
 const composer = $('#composer'), input = $('#feedback'), seek = $('#seek'), timeline = $('#timeline');
+const playhead = Object.assign(document.createElement('span'), { className: 'playhead' });
+const wordsList = $('#words'), overlay = $('#transcript-overlay'), overlayToggle = $('#toggle-transcript');
 const { edl, assets, transcripts, version, record } = config;
 let notes = [], locked = false, stateLoaded = false, sent = false;
 const reactions = new Map();
@@ -15,6 +18,7 @@ let reviewer = reviewers.length === 1 ? reviewers[0].id : 'anonymous';
 const reactionKey = (ref, actor) => `${ref}:${actor}`;
 let port, ready, width, height, fps, frameCount, playing = false, positioned = false;
 let frame = 0, gesture, draft, request = 0, noteCount = 0, range, dragRange;
+let cues = [], currentCue;
 $('#version').textContent = version;
 const status = message => { $('#status').textContent = message; };
 const editable = () => ready && stateLoaded && !locked && !sent;
@@ -41,7 +45,7 @@ function redraw() {
 }
 
 function drawTimeline() {
-  const selected = range ?? dragRange;
+  const selected = dragRange ? dragRange.preview : range;
   timeline.hidden = !editable() && !edl.segments.length && !selected && !notes.some(note => note.kind === 'range');
   const spans = [
     ...edl.segments.map(segment => [segment.start_frame, segment.end_frame, 'clip-span']),
@@ -55,7 +59,20 @@ function drawTimeline() {
     if (end > start) span.style.width = `${(end - start) / frameCount * 100}%`;
     return span;
   }));
+  timeline.append(playhead);
+  clearRange.hidden = !selected;
+  if (selected) {
+    $('#range-label').textContent = `Selected F${selected.start}–F${selected.end} (${((selected.end - selected.start) / fps).toFixed(1)} s)`;
+  }
+  for (const cue of cues) {
+    cue.button.classList.toggle('in-range', Boolean(selected && cue.start < selected.end && cue.end > selected.start));
+  }
   updateRangeFields();
+}
+
+function selectRange(action) {
+  range = updateSelection(range, action);
+  drawTimeline();
 }
 
 function updateRangeFields() {
@@ -66,11 +83,13 @@ function updateRangeFields() {
 function showFrame(index) {
   frame = index;
   seek.value = index;
+  playhead.style.left = `${(index + .5) / frameCount * 100}%`;
   $('#time').textContent = `${(index / fps).toFixed(3)} s · F${index}`;
   const spans = mapInterval(edl, assets, index, index + 1);
   $('#source-frame').textContent = spans.map(span =>
     `${span.clip} · source F${span.source_frame}${span.repeated ? ' · repeated proxy frame' : ''}`).join(' / ');
   if (!range && !dragRange) updateRangeFields();
+  syncTranscript();
   redraw();
 }
 
@@ -92,14 +111,15 @@ function closeComposer() {
 }
 
 $('#play').onclick = () => {
-  if (!ready || gesture) return;
+  if (!ready || gesture || dragRange) return;
   closeComposer();
   seekFrame(!playing && frame === frameCount - 1 ? 0 : frame, { play: !playing });
 };
 
-function navigate(index) {
-  if (!ready || gesture) return;
+function navigate(index, selection) {
+  if (!ready || gesture || dragRange) return;
   closeComposer();
+  if (selection) selectRange(selection);
   seekFrame(index);
 }
 
@@ -132,7 +152,7 @@ function openComposer(note, waiting = false) {
 }
 
 surface.onpointerdown = event => {
-  if (!editable() || (!positioned && !playing) || !event.isPrimary || event.button !== 0 || gesture) return;
+  if (!editable() || (!positioned && !playing) || !event.isPrimary || event.button !== 0 || gesture || dragRange) return;
   event.preventDefault();
   closeComposer();
   if (playing) seekFrame(frame);
@@ -173,17 +193,17 @@ function timelineFrame(event) {
   return frameAt((event.clientX - bounds.left) / bounds.width * frameCount, 1, frameCount);
 }
 timeline.onpointerdown = event => {
-  if (!editable() || !event.isPrimary || event.button !== 0) return;
+  if (!ready || gesture || dragRange || !event.isPrimary || event.button !== 0) return;
   closeComposer();
   const start = timelineFrame(event);
-  range = null;
-  dragRange = { id: event.pointerId, origin: start, start, end: start + 1 };
+  dragRange = { id: event.pointerId, origin: start, x: event.clientX, preview: range };
   if (event.isTrusted) timeline.setPointerCapture(event.pointerId);
   seekFrame(start);
-  drawTimeline();
 };
 timeline.onpointermove = event => {
-  if (dragRange?.id !== event.pointerId) return;
+  if (dragRange?.id !== event.pointerId || !editable()) return;
+  if (!dragRange.dragged && Math.abs(event.clientX - dragRange.x) < 5) return;
+  dragRange.dragged = true;
   const index = timelineFrame(event);
   let start = Math.min(index, dragRange.origin), end = Math.max(index, dragRange.origin) + 1;
   // A dragged range snaps each edge to a shot cut within a fifth of a second.
@@ -192,18 +212,23 @@ timeline.onpointermove = event => {
     start = snapToCut(edl, start, tolerance);
     end = Math.max(start + 1, snapToCut(edl, end, tolerance));
   }
-  Object.assign(dragRange, { start, end });
+  dragRange.preview = { start, end };
   drawTimeline();
 };
 timeline.onpointerup = event => {
   if (dragRange?.id !== event.pointerId) return;
   timeline.onpointermove(event);
-  range = { start: dragRange.start, end: dragRange.end };
+  const selected = editable() && dragRange.dragged ? dragRange.preview : null;
   dragRange = null;
-  if (range.start !== frame) seekFrame(range.start);
+  selectRange(selected ? { type: 'range', ...selected } : { type: 'clear' });
+  const index = selected?.start ?? timelineFrame(event);
+  if (index !== frame) seekFrame(index);
+};
+timeline.onpointercancel = timeline.onlostpointercapture = event => {
+  if (dragRange?.id !== event.pointerId) return;
+  dragRange = null;
   drawTimeline();
 };
-timeline.onpointercancel = () => { dragRange = null; drawTimeline(); };
 
 for (const selector of ['#range-start', '#range-end']) {
   $(selector).onchange = () => {
@@ -211,12 +236,16 @@ for (const selector of ['#range-start', '#range-end']) {
     closeComposer();
     const start = Math.max(0, Math.min(frameCount - 1, Math.round(Number($('#range-start').value))));
     const end = Math.max(start + 1, Math.min(frameCount, Math.round(Number($('#range-end').value))));
-    range = { start, end };
-    seekFrame(start);
-    drawTimeline();
+    navigate(start, { type: 'range', start, end });
   };
 }
-$('#clear-range').onclick = () => { closeComposer(); range = null; drawTimeline(); };
+const clearRange = $('#clear-range');
+clearRange.onclick = () => {
+  closeComposer();
+  dragRange = null;
+  if (document.activeElement === clearRange) timeline.focus({ preventScroll: true });
+  selectRange({ type: 'clear' });
+};
 $('#add-range').onclick = () => {
   if (!editable()) return;
   const start = range?.start ?? frame, end = range?.end ?? frame + 1;
@@ -229,17 +258,32 @@ $('#whole').onclick = () => {
   openComposer({ kind: 'general', frame: 0, end_frame: frameCount, whole_video: true });
 };
 document.addEventListener('keydown', event => {
-  if (event.altKey || event.metaKey || event.ctrlKey || event.target.closest('textarea,input,button')) return;
-  if (event.key.toLowerCase() === 'w') $('#whole').click();
-  if (event.key === 'Escape' && !draft) $('#clear-range').click();
+  if (event.altKey || event.metaKey || event.ctrlKey || event.defaultPrevented) return;
+  if (event.key === 'Escape' && (range || dragRange)) {
+    clearRange.click();
+    return;
+  }
+  if (!ready || draft || event.target.closest('textarea,input,select,[contenteditable=true]')) return;
+  if (event.key.toLowerCase() === 'w' && !event.target.closest('button')) $('#whole').click();
   if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+    const delta = event.key === 'ArrowLeft' ? -1 : 1;
+    if (event.shiftKey) {
+      if (!editable() || !range || dragRange || gesture) return;
+      event.preventDefault();
+      selectRange({ type: 'adjust-end', delta, frameCount });
+      return;
+    }
     event.preventDefault();
-    navigate(frame + (event.key === 'ArrowLeft' ? -1 : 1));
+    navigate(frame + delta);
   }
 });
 
 $('#cancel').onclick = closeComposer;
-composer.onkeydown = event => { if (event.key === 'Escape') closeComposer(); };
+composer.onkeydown = event => {
+  if (event.key !== 'Escape') return;
+  event.stopPropagation();
+  closeComposer();
+};
 composer.onsubmit = event => {
   event.preventDefault();
   const text = input.value.trim();
@@ -267,7 +311,7 @@ function mediaBoundary(asset, low, high, seconds, strictlyAfter) {
 }
 
 function renderTranscript() {
-  const items = edl.segments.flatMap(segment => {
+  cues = edl.segments.flatMap(segment => {
     const asset = assets[segment.asset];
     const startSeconds = segment.source_in_seconds, endSeconds = segment.source_out_seconds;
     return transcriptCues(transcripts[segment.asset]).flatMap(cue => {
@@ -285,24 +329,51 @@ function renderTranscript() {
       const end = mediaBoundary(asset, start + 1, segment.media_out, cueEnd, false);
       const first = segment.start_frame + start - segment.media_in;
       const last = segment.start_frame + end - segment.media_in;
-      const item = document.createElement('span');
       const button = Object.assign(document.createElement('button'), {
-        textContent: joinWords(words.map(word => word.text)), title: `Jump to F${first}. Shift-click to select these words.`,
+        type: 'button', textContent: joinWords(words.map(word => word.text)),
+        title: `Jump to F${first}. Shift-click to select or extend a range.`,
       });
+      const bounds = { start: first, end: last };
       button.onclick = event => {
-        navigate(first);
-        if (event.shiftKey && editable()) {
-          range = { start: first, end: last };
-          drawTimeline();
-        }
+        navigate(first, event.shiftKey && editable() ? { type: 'cue', cue: bounds } : { type: 'clear' });
       };
-      item.append(button);
-      return [item];
+      return [{ ...bounds, button }];
     });
   });
-  $('#transcript').hidden = !items.length;
-  $('#words').replaceChildren(...items);
+  $('#transcript').hidden = overlayToggle.hidden = !cues.length;
+  wordsList.replaceChildren(...cues.map(cue => cue.button));
+  syncTranscript();
 }
+
+function scrollToCurrentCue() {
+  if (!currentCue || !$('#transcript').open) return;
+  const list = wordsList.getBoundingClientRect();
+  const line = currentCue.button.getBoundingClientRect();
+  // Scroll only the transcript so the video and transport stay in view.
+  if (line.top < list.top) wordsList.scrollTop += line.top - list.top;
+  else if (line.bottom > list.bottom) wordsList.scrollTop += line.bottom - list.bottom;
+}
+
+function updateOverlay() {
+  overlay.hidden = !currentCue || overlayToggle.getAttribute('aria-pressed') !== 'true';
+  $('#overlay-text').textContent = overlay.hidden ? '' : currentCue.button.textContent;
+}
+
+function syncTranscript() {
+  const next = cues.findLast(cue => cue.start <= frame && frame < cue.end);
+  if (next === currentCue) return;
+  currentCue?.button.removeAttribute('aria-current');
+  currentCue = next;
+  currentCue?.button.setAttribute('aria-current', 'true');
+  scrollToCurrentCue();
+  updateOverlay();
+}
+
+$('#transcript').ontoggle = scrollToCurrentCue;
+overlayToggle.onclick = () => {
+  overlayToggle.setAttribute('aria-pressed', overlayToggle.getAttribute('aria-pressed') !== 'true');
+  updateOverlay();
+};
 
 function renderNotes() {
   $('#count').textContent = `(${notes.length})`;
