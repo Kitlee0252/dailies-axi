@@ -109,35 +109,40 @@
     <rect x="212" y="154" width="200" height="146" rx="12" class="box live"/>
     <text x="226" y="178" class="h">ingest · transcribe</text>
     <text x="226" y="198" class="s">H.264 代理 + 逐帧映射原素材</text>
-    <text x="226" y="214" class="s">镜头切点、静音检测（缓存）</text>
+    <text x="226" y="214" class="s">彩色画面切点（RGB 差分）</text>
     <text x="226" y="230" class="s">whisper 逐字时间，按静音校正</text>
     <text x="226" y="254" class="m">media/&lt;asset&gt;.mp4</text>
-    <text x="226" y="272" class="m">manifest · transcript</text>
+    <text x="226" y="272" class="m">manifest（含 scene_cuts）</text>
+    <text x="226" y="290" class="m">&lt;asset&gt;.transcript.json</text>
 
     <rect x="426" y="154" width="200" height="146" rx="12" class="box live"/>
     <text x="440" y="178" class="h">build vN</text>
     <text x="440" y="198" class="s">冻结合成快照，整数帧校验</text>
     <text x="440" y="214" class="s">生成 EDL（成片↔代理↔原素材）</text>
-    <text x="440" y="230" class="s">记录上一版处理结果</text>
+    <text x="440" y="230" class="s">快照转写，记录上一轮结果</text>
     <text x="440" y="254" class="m">review/vN/edl.json</text>
     <text x="440" y="272" class="m">version.json</text>
+    <text x="440" y="290" class="s">新版链接回帖到上一轮会话</text>
 
     <rect x="640" y="154" width="250" height="146" rx="12" class="box live"/>
     <text x="654" y="178" class="h">review · 审片页</text>
-    <text x="654" y="198" class="s">框画面 / 选时间段（吸附切点）</text>
-    <text x="654" y="214" class="s">拖播放头 / 校正转写 / 整片意见</text>
-    <text x="654" y="230" class="s">上一轮结果、偏好披露和跳转</text>
-    <text x="654" y="250" class="s">认可 / 拒绝 / 选备选 / 重开</text>
-    <text x="654" y="272" class="m">review/vN/review.html</text>
+    <text x="654" y="198" class="s">框画面 · 拖播放头 · 拖选时间段</text>
+    <text x="654" y="213" class="s">吸附切点 · Shift 点字幕续选</text>
+    <text x="654" y="228" class="s">转写叠加开关 · 校正字幕</text>
+    <text x="654" y="243" class="s">笔记浮窗锚定在所选区域旁</text>
+    <text x="654" y="258" class="s">上一轮结果与披露：认可 / 拒绝 /</text>
+    <text x="654" y="273" class="s">选备选 / 重开</text>
+    <text x="654" y="291" class="m">review/vN/review.html</text>
 
     <rect x="904" y="154" width="250" height="146" rx="12" class="box live"/>
     <text x="918" y="178" class="h">poll · 锁定</text>
     <text x="918" y="198" class="s">一批意见写入不可改的 notes.json</text>
     <text x="918" y="214" class="s">每条带：帧/区域/元素/镜头、</text>
     <text x="918" y="230" class="s">原素材帧、当时说的话</text>
-    <text x="918" y="254" class="m">review/vN/notes.json</text>
-    <text x="918" y="272" class="m">schema 3（兼容 2）</text>
-    <text x="918" y="290" class="m">reviewer / reactions / reopens</text>
+    <text x="918" y="246" class="s">校正后的源转写保存给下一版</text>
+    <text x="918" y="264" class="m">review/vN/notes.json</text>
+    <text x="918" y="279" class="m">schema 3（兼容 2）</text>
+    <text x="918" y="294" class="m">reviewer · reactions · reopens</text>
 
     <!-- Review flows -->
     <path d="M198,226 H212" class="flow"/>
@@ -162,33 +167,35 @@
 
     <rect x="232" y="374" width="200" height="174" rx="12" class="box live"/>
     <text x="246" y="398" class="h">analyze · plan</text>
-    <text x="246" y="418" class="s">锁定意见 → 操作草稿</text>
-    <text x="246" y="434" class="s">原素材锚点 + 吸附候选</text>
-    <text x="246" y="450" class="s">每条附证据帧</text>
-    <text x="246" y="466" class="s">结合学习计划选择备选</text>
-    <text x="246" y="492" class="m">ops.json</text>
-    <text x="246" y="510" class="s">删 · 修剪 · 收紧 · 挂字幕</text>
-    <text x="246" y="526" class="s">问 · 拒绝（带理由）</text>
+    <text x="246" y="418" class="s">analyze：彩色切点 + 静音</text>
+    <text x="246" y="434" class="s">plan：锁定意见 → 操作草稿</text>
+    <text x="246" y="450" class="s">原素材锚点、吸附候选、证据帧</text>
+    <text x="246" y="466" class="s">结合学习计划选备选</text>
+    <text x="246" y="488" class="m">cut-plans/vN/ops.draft</text>
+    <text x="246" y="504" class="m">→ ops.json</text>
+    <text x="246" y="522" class="s">删 · 修剪 · 收紧 · 挂字幕</text>
+    <text x="246" y="538" class="s">问 · 拒绝（带理由）</text>
 
     <rect x="446" y="374" width="230" height="174" rx="12" class="box live"/>
     <text x="460" y="398" class="h">apply</text>
     <text x="460" y="418" class="s">全部换算到原素材帧再一次合并</text>
     <text x="460" y="434" class="s">切点优先对齐镜头切点 + 静音</text>
     <text x="460" y="450" class="s">后续时间自动顺移</text>
-    <text x="460" y="466" class="s">口味类意见 → 多个备选版本</text>
-    <text x="460" y="492" class="m">cut.json（唯一事实）</text>
-    <text x="460" y="510" class="m">changes.json（改动清单）</text>
-    <text x="460" y="528" class="s">只重写合成页里的受管剪辑段</text>
+    <text x="460" y="466" class="s">口味类意见 → 多个备选候选</text>
+    <text x="460" y="488" class="m">cut-candidates/&lt;名&gt;/</text>
+    <text x="460" y="504" class="m">cut.json（唯一事实）</text>
+    <text x="460" y="520" class="m">changes.json（改动清单）</text>
+    <text x="460" y="538" class="s">只暂存候选，不动工作合成页</text>
 
     <rect x="690" y="374" width="250" height="174" rx="12" class="box live"/>
     <text x="704" y="398" class="h">verify（送审前把关）</text>
-    <text x="704" y="418" class="s">拦下：闪帧、切在话中间、</text>
-    <text x="704" y="434" class="s">多删/少删、字幕锚点失效、时长</text>
-    <text x="704" y="450" class="s">只提醒：停顿长短、响度</text>
+    <text x="704" y="418" class="s">拦下：闪帧、切在话中间、多删少删</text>
+    <text x="704" y="434" class="s">字幕锚点失效、时长、偏好漏披露</text>
+    <text x="704" y="450" class="s">项目决定被回退；只提醒停顿和响度</text>
     <text x="704" y="466" class="s">成片级：渲染 + 重新转写 + 像素</text>
-    <text x="704" y="486" class="s">≤3 分钟每轮渲染；更长先问你</text>
+    <text x="704" y="486" class="s">≤3 分钟自动渲染；更长先问你</text>
     <text x="704" y="510" class="m">verify.json → select</text>
-    <text x="704" y="528" class="s">拦下偏好漏披露和项目决定回退</text>
+    <text x="704" y="528" class="s">select：装入 cut.json，刷新受管段</text>
 
     <rect x="954" y="374" width="200" height="174" rx="12" class="box live"/>
     <text x="968" y="398" class="h">learn</text>
@@ -217,11 +224,11 @@
     <rect x="12" y="588" width="1156" height="118" rx="16" class="zone"/>
     <text x="28" y="610" class="zl">③ 私有工作目录（素材与审片产物，不进 Git、不上传）</text>
     <text x="28" y="638" class="m">source/index.html  ← 工作合成页（受管剪辑段 + 人写的图形动画）</text>
-    <text x="28" y="660" class="m">media/            ← 代理视频 · manifest · 分析缓存 · 转写</text>
-    <text x="28" y="682" class="m">review/v1 v2 …    ← 每版快照 · notes · edl · version（锁定后不可改）</text>
-    <text x="640" y="638" class="m">cut.json · ops.json · changes.json · verify.json</text>
-    <text x="640" y="660" class="m">brief.json · learning/{events,decisions,params}</text>
-    <text x="640" y="682" class="m">DAILIES_HOME/{ledger,reviewers,proposals}</text>
+    <text x="28" y="660" class="m">media/            ← 代理 · manifest · 分析缓存 · 转写（含校正）</text>
+    <text x="28" y="682" class="m">review/v1 v2 …    ← 快照 · notes · edl · version（锁定后不可改）</text>
+    <text x="640" y="638" class="m">cut.json · cut-plans/vN · cut-candidates/&lt;名&gt;</text>
+    <text x="640" y="660" class="m">brief.json · brief.md · learning/{events,decisions,params,plan-vN}</text>
+    <text x="640" y="682" class="m">DAILIES_HOME/{ledger,reviewers,proposals,settings}</text>
 
     <!-- Zone: external -->
     <rect x="12" y="730" width="1156" height="116" rx="16" class="zone"/>
@@ -242,11 +249,11 @@
   <h2>三块各自的唯一职责</h2>
   <div class="grid">
     <div class="card"><h3>① dailies-axi · 审 <span class="tag t-live">已实现</span></h3>
-      <p>把审片人的意图变成精确、锁定、可追溯的意见批次。读取已经验收的 changes.json，在下一轮显示结果与披露，并采集审片人反应。</p></div>
+      <p>把审片人的意图变成精确、锁定、可追溯的意见批次。审片页支持播放头拖动、时间段吸附切点、转写叠加和字幕校正，校正在 poll 时写回源转写。读取已经验收的 changes.json，在下一轮显示结果与披露，并采集审片人反应。</p></div>
     <div class="card"><h3>② dailies-cut · 改 <span class="tag t-live">已实现</span></h3>
-      <p>管理剪辑表、帧换算、吸附和顺移，生成改动清单，独立渲染验收。learn 根据同一账本、参数和计算时间得出相同状态。</p></div>
+      <p>管理剪辑表、帧换算、吸附和顺移，生成改动清单，独立渲染验收。analyze 用彩色画面差分和静音找切点并按代理哈希缓存。learn 根据同一账本、参数和计算时间得出相同状态。</p></div>
     <div class="card"><h3>skill · 判断 <span class="tag t-live">已实现</span></h3>
-      <p><code>dailies-axi</code> skill 教流程；<code>dailies-edit</code> skill 只写行家的判断规则。agent 负责理解意见，命令负责算对。</p></div>
+      <p><code>dailies-axi</code> skill 教流程；<code>dailies-edit</code> 是薄 skill，只写意见分类、授权范围和备选取舍，细节在 <code>references/</code>（维度词表、默认值）。agent 负责理解意见，命令负责算对。</p></div>
   </div>
 
   <h2>模块之间的文件契约</h2>
@@ -254,10 +261,14 @@
     <tr><th>文件</th><th>谁写</th><th>谁读</th><th>内容</th><th>状态</th></tr>
     <tr><td><code>review/vN/notes.json</code></td><td>dailies-axi poll</td><td>dailies-cut plan、learn</td><td>Schema 3，兼容 2。保留帧、区域、原素材帧和原话，新增 reviewer、reactions、reopens</td><td><span class="tag t-live">已实现</span></td></tr>
     <tr><td><code>review/vN/edl.json</code></td><td>dailies-axi build</td><td>dailies-cut</td><td>成片帧 ↔ 代理帧 ↔ 原素材帧、切点</td><td><span class="tag t-live">已实现</span></td></tr>
+    <tr><td><code>review/vN/version.json</code></td><td>dailies-axi build</td><td>dailies-axi review、learn</td><td>父版本、改动说明、上一轮结果（outcomes）和转写快照位置；新版打开后把链接回帖到上一轮会话</td><td><span class="tag t-live">已实现</span></td></tr>
+    <tr><td><code>media/&lt;asset&gt;.transcript.json</code></td><td>transcribe、poll（保存校正）</td><td>build、dailies-cut analyze</td><td>逐字时间与静音对齐；校正行保留原时间并优先于 whisper 草稿，早期版本保留各自快照</td><td><span class="tag t-live">已实现</span></td></tr>
+    <tr><td><code>media/&lt;asset&gt;.analysis.json</code></td><td>dailies-cut analyze</td><td>plan、apply、verify</td><td>按代理哈希缓存的彩色画面切点、静音区间、响度；ingest 的 <code>scene_cuts</code> 使用同一检测器</td><td><span class="tag t-live">已实现</span></td></tr>
     <tr><td><code>brief.json</code></td><td>open --brief-file</td><td>plan、learn</td><td>项目 ID、平台与体裁、目标时长、审片人、最终决定人</td><td><span class="tag t-live">已实现</span></td></tr>
+    <tr><td><code>cut-plans/vN/ops.draft.json</code></td><td>dailies-cut plan</td><td>agent</td><td>锁定意见匹配到的原素材区间、候选切点、证据帧与波形，供 agent 补全成 ops.json</td><td><span class="tag t-live">已实现</span></td></tr>
     <tr><td><code>ops.json</code></td><td>plan + agent</td><td>apply</td><td>操作的意图、范围与授权等级，及学习依据 basis 和待披露信息</td><td><span class="tag t-live">已实现</span></td></tr>
-    <tr><td><code>cut.json</code></td><td>apply</td><td>apply、verify</td><td>累积剪辑表、素材代理帧、叠加锚点和受保护的删除区间</td><td><span class="tag t-live">已实现</span></td></tr>
-    <tr><td><code>changes.json</code></td><td>apply</td><td>dailies-axi build、learn</td><td>每条意见改在新版的哪些帧、备选、学到的规则披露</td><td><span class="tag t-live">已实现</span></td></tr>
+    <tr><td><code>cut.json</code></td><td>apply（候选）、select（装入工作区）</td><td>apply、verify</td><td>累积剪辑表、素材代理帧、叠加锚点和受保护的删除区间</td><td><span class="tag t-live">已实现</span></td></tr>
+    <tr><td><code>changes.json</code></td><td>apply</td><td>dailies-axi build（作为 outcomes）、learn</td><td>每条意见改在新版的哪些帧、备选、学到的规则披露；位于 <code>cut-candidates/&lt;名&gt;/</code>，与同目录的 cut.json、ops.json、verify.json 配套</td><td><span class="tag t-live">已实现</span></td></tr>
     <tr><td><code>verify.json</code></td><td>verify</td><td>agent、送审判断</td><td>渲染与客观检查回执，包括学习披露和项目决定检查</td><td><span class="tag t-live">已实现</span></td></tr>
     <tr><td><code>learn.classify.json</code></td><td>agent</td><td>learn ingest --classified</td><td>用受控词表标注每条意见的维度、方向、值、权限、范围和重开引用</td><td><span class="tag t-live">已实现</span></td></tr>
     <tr><td><code>learning/events.jsonl</code><br><code>DAILIES_HOME/ledger.jsonl</code></td><td>learn ingest、learn forget</td><td>learn plan、status、propose</td><td>只追加的项目及跨项目事件，撤销记录保留审计历史</td><td><span class="tag t-live">已实现</span></td></tr>
@@ -267,15 +278,26 @@
     <tr><td><code>DAILIES_HOME/proposals/&lt;id&gt;.md</code></td><td>learn propose</td><td>人工审核</td><td>L3 通用规则的脱敏证据、差异和回归结果</td><td><span class="tag t-live">已实现</span></td></tr>
   </table>
 
+  <h2>两个 CLI 的命令</h2>
+  <table>
+    <tr><th>CLI</th><th>命令</th><th>作用</th></tr>
+    <tr><td><code>dailies-axi</code></td><td><code>open</code></td><td>一条命令：建工作区 → ingest → 转写 → build → review → poll；传入合成页则继续下一轮（<code>--note</code>、<code>--outcomes</code>），首次可带 <code>--brief-file</code></td></tr>
+    <tr><td><code>dailies-axi</code></td><td><code>init · ingest · transcribe · build · review · poll</code></td><td>分步版本：建目录、导入素材、重做转写或导入字幕、冻结版本、托管审片页、锁定意见</td></tr>
+    <tr><td><code>dailies-axi</code></td><td><code>frame · doctor</code></td><td>按 notes 里的帧抽取证据图；检查 Node、FFmpeg、lavish-axi、whisper</td></tr>
+    <tr><td><code>dailies-cut</code></td><td><code>analyze · plan · apply · verify · select</code></td><td>分析素材 → 意见变操作草稿 → 暂存候选 → 验收 → 装入工作剪辑表</td></tr>
+    <tr><td><code>dailies-cut</code></td><td><code>learn ingest · plan · status · forget · pause · propose</code></td><td>收入意见与反应、给出本轮偏好计划、查看档案、撤销、暂停、生成通用规则提案</td></tr>
+  </table>
+
   <h2>一轮的完整路径</h2>
   <table>
     <tr><th>#</th><th>谁</th><th>做什么</th></tr>
     <tr><td>1</td><td>agent</td><td><code>dailies-axi open 粗剪.mp4</code>（或合成页）→ 得到审片链接</td></tr>
-    <tr><td>2</td><td>你</td><td>在审片页上框画面、拖时间段、点字幕、写整片意见 → 发送</td></tr>
-    <tr><td>3</td><td>dailies-axi</td><td>锁定 v1 意见，交给 agent</td></tr>
-    <tr><td>4</td><td>agent + dailies-cut</td><td><code>learn ingest</code> → 分类 → <code>learn plan</code> → <code>plan</code> 生成剪辑草稿 → <code>apply</code> → <code>verify</code></td></tr>
-    <tr><td>5</td><td>dailies-axi</td><td><code>dailies-cut select</code> 安装通过验收的版本；<code>dailies-axi build v2</code> 展示结果和偏好披露</td></tr>
-    <tr><td>6</td><td>learn</td><td>下一轮 <code>learn ingest</code> 收入你的选择与反应；<code>learn propose</code> 把达标的通用规则交人工批准</td></tr>
+    <tr><td>2</td><td>你</td><td>在审片页上框画面、拖播放头、拖时间段、点字幕、校正字幕、写整片意见 → 发送（有笔记或字幕校正即可发送）</td></tr>
+    <tr><td>3</td><td>dailies-axi</td><td><code>poll</code> 锁定 v1 的 notes.json，保存校正后的转写，交给 agent</td></tr>
+    <tr><td>4</td><td>agent + dailies-cut</td><td>按 dailies-edit skill：<code>learn ingest</code> → 分类（<code>learn.classify.json</code>）→ <code>learn plan</code> → <code>plan</code> 生成剪辑草稿 → <code>apply</code> 暂存候选（口味类给多个备选）→ <code>verify</code></td></tr>
+    <tr><td>5</td><td>dailies-axi</td><td><code>dailies-cut select</code> 安装通过验收的候选；<code>dailies-axi open source/index.html --outcomes …/changes.json</code> 建 v2，展示结果、跳转和偏好披露，并回帖到上一轮会话</td></tr>
+    <tr><td>6</td><td>你</td><td>在 v2 里认可、拒绝、选备选或重开上一轮结果，并继续提新意见；回到第 2 步</td></tr>
+    <tr><td>7</td><td>learn</td><td>下一轮 <code>learn ingest</code> 收入你的选择与反应，更新项目决定和审片人档案；终稿签收时 <code>learn ingest --signoff</code>，<code>learn propose</code> 把达标的通用规则交人工批准</td></tr>
   </table>
   <p><span class="tag t-plan">未实现</span> 额外剪辑操作和 OTIO 交换。</p>
 </main>
