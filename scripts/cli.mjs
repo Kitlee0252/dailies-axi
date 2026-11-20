@@ -2,13 +2,14 @@
 import { spawn, spawnSync } from 'node:child_process';
 import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { basename, dirname, extname, join } from 'node:path';
+import { createInterface } from 'node:readline/promises';
 import { fileURLToPath } from 'node:url';
 import { decode, encode } from '@toon-format/toon';
 import { buildReview } from './build-review.mjs';
 import { commands, isCompositionFile, parseCommand } from './cli-args.mjs';
 import { compositionSources, parseComposition, relocateComposition } from './composition.mjs';
 import { readManifest } from './manifest.mjs';
-import { readNotes } from './notes.mjs';
+import { projectState, readNotes } from './notes.mjs';
 import { findModel, findWhisper } from './whisper.mjs';
 import { compositionPath, initWorkspace, isFootageStarter, latestVersion, populateStarter, readComposition, samplePath } from './workspace.mjs';
 
@@ -112,7 +113,8 @@ async function review(file, options) {
 // The reviewer is still looking at the previous round, so post the new link
 // there once. Lavish refuses when the reviewer ended that session.
 async function announce(file, url) {
-  const { version, parent, note } = JSON.parse(await readFile(join(dirname(file), 'version.json'), 'utf8'));
+  const record = JSON.parse(await readFile(join(dirname(file), 'version.json'), 'utf8'));
+  const { version, parent, note } = record;
   const marker = join(dirname(file), '.announced');
   if (!parent || await stat(marker).then(() => true, () => false)) return;
   const previous = join(dirname(dirname(file)), parent, 'review.html');
@@ -121,6 +123,7 @@ async function announce(file, url) {
   if (reply.status !== 0) {
     return `Could not post the ${version} link in the ${parent} review. Give the reviewer the session URL.`;
   }
+  await projectState(dirname(previous), 'next.js', { next: { ...record, review_url: url } });
   await writeFile(marker, url);
   return `Posted the ${version} link in the ${parent} review.`;
 }
@@ -166,17 +169,41 @@ async function createWorkspace(workspace) {
   }
 }
 
+async function captureBrief(workspace, supplied, initial) {
+  const file = join(workspace, 'brief.md');
+  try {
+    const text = await readFile(file, 'utf8');
+    return { file, status: text.trim() ? 'recorded' : 'skipped' };
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+    if (!initial) return { status: 'missing' };
+  }
+  let text = supplied;
+  if (text === undefined && process.stdin.isTTY) {
+    const input = createInterface({ input: process.stdin, output: process.stderr });
+    try {
+      text = await input.question('Edit brief — audience, destination, target length and goal (Enter to skip): ');
+    } finally {
+      input.close();
+    }
+  }
+  if (text === undefined) return { status: 'missing', action: 'Ask once for an edit brief and save it as brief.md, or pass --brief on the initial open.' };
+  await writeFile(file, text.trim() + '\n', { flag: 'wx', mode: 0o600 });
+  return { file, status: text.trim() ? 'recorded' : 'skipped' };
+}
+
 async function openVideo(video, workspace, options) {
   if (!(await stat(video)).isFile()) throw new Error(`Not a video file: ${video}`);
   await createWorkspace(workspace);
 
   await initWorkspace(workspace);
+  const brief = await captureBrief(workspace, options.brief, true);
   const file = compositionPath(workspace);
   const media = join(workspace, 'media');
   const { asset, version } = options;
   const { transcript } = await ingest([video, asset], { ...options, media }, file);
   const { next_step, ...built } = await build([version, join(workspace, 'review')], { media, 'initial-version': true }, file);
-  return openReview({ workspace, asset, ...built, transcript }, options);
+  return openReview({ workspace, asset, ...built, transcript, brief }, options);
 }
 
 async function openComposition(input, destination, options) {
@@ -218,6 +245,7 @@ async function openComposition(input, destination, options) {
     await writeFile(file, relocateComposition(original, document, input), { flag: 'wx' });
   }
 
+  const brief = await captureBrief(workspace, options.brief, !latest);
   const ingested = [];
   for (const [asset, source] of missing) {
     const { transcript } = await ingest([source, asset], { ...options, media, fps: document.fps }, file);
@@ -228,7 +256,7 @@ async function openComposition(input, destination, options) {
     ...(options.note === undefined ? {} : { note: options.note }),
     ...(options.outcomes ? { outcomes: options.outcomes } : {}),
   }, file);
-  return openReview({ workspace, composition: file, ...built, ingested }, options);
+  return openReview({ workspace, composition: file, ...built, ingested, brief }, options);
 }
 
 async function openReview(receipt, options) {

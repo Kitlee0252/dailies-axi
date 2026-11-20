@@ -9,8 +9,9 @@ import { parseArgs } from 'node:util';
 import { documentEdl } from './composition-edl.mjs';
 import { compositionSources, normalizeComposition, parseComposition } from './composition.mjs';
 import { resolveOutcomes } from './outcomes.mjs';
+import { readReviewProof } from './review-proof.mjs';
 import { latestVersion } from './workspace.mjs';
-import { readManifest, writeJson } from './manifest.mjs';
+import { readManifest, sha256, writeJson } from './manifest.mjs';
 import { projectState, readNotes } from './notes.mjs';
 
 export async function buildReview(args) {
@@ -75,9 +76,14 @@ export async function buildReview(args) {
     const parent = latest ? `v${latest}` : null;
     const previous = parent ? await readNotes(join(root, parent)) : null;
     if (parent && !previous) throw new Error(`Poll and lock ${parent}'s feedback before building ${version}`);
-    const outcomes = values.outcomes ? JSON.parse(await readFile(resolve(values.outcomes), 'utf8')) : {};
+    const outcomesText = values.outcomes ? await readFile(resolve(values.outcomes), 'utf8') : '{}';
+    const outcomes = JSON.parse(outcomesText);
     const resolutions = resolveOutcomes(outcomes, previous, version, edl.frame_count);
-    const record = { version, parent, note: values.note, resolutions };
+    const proof = await readReviewProof({ html: authorHtml, outcomes, outcomesText, file: values.outcomes,
+      parentFolder: parent ? join(root, parent) : undefined, media: dir,
+      assets: Object.keys(assets), frameCount: edl.frame_count, fps: edl.fps });
+    const record = { version, parent, note: values.note, resolutions,
+      ...(proof ? { cut_sha256: proof.cut_sha256, verification_coverage: proof.verification_coverage } : {}) };
     const inline = code => `<script>${code.replace(/<\/script/gi, '<\\/script')}</script>`;
     const classic = code => code.replace(/^import .*;\n/gm, '').replace(/^export /gm, '');
     const liveComposition = composition.replace('<script src="gsap.min.js"></script>', () => inline(gsapBanner + gsap))
@@ -101,6 +107,9 @@ export async function buildReview(args) {
         const name = basename(asset.proxy);
         const snapshot = join(stage, 'media', name);
         await copyFile(join(dir, name), snapshot, constants.COPYFILE_FICLONE);
+        if (proof && await sha256(snapshot) !== proof.proxy_sha256[id]) {
+          throw new Error(`Proxy ${id} changed while building the review snapshot`);
+        }
         await copyFile(snapshot, join(project, 'media', name), constants.COPYFILE_FICLONE);
         if (transcripts[id]) await writeJson(join(stage, 'media', `${id}.transcript.json`), transcripts[id]);
       }

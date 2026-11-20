@@ -10,3 +10,7 @@ media/
 *.srt
 *.vtt
 *.transcript.json
+/cut.json
+/cut-plans/
+/cut-candidates/
+/brief.md

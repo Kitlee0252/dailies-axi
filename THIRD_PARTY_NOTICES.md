@@ -33,3 +33,7 @@ The unmodified runtime from `hyperframes@0.9.69` is inlined in generated review 
 - FFmpeg and FFprobe run as external commands. Their licenses depend on the installed build. [FFmpeg legal information](https://ffmpeg.org/legal.html)
 - whisper.cpp (MIT, the ggml authors) is an optional external command. Model files are installed separately. [whisper.cpp](https://github.com/ggml-org/whisper.cpp) · [GGML model conversion](https://huggingface.co/ggerganov/whisper.cpp) · [OpenAI Whisper weights, MIT](https://github.com/openai/whisper)
 - [Lavish AXI](https://github.com/kunchenguid/lavish-axi) (MIT) is the external review host and feedback transport.
+
+## Editing workflow references
+
+The edit engine calls the existing FrameJam-derived frame extraction and local Whisper lookup listed above. Its cut table, render checks and operations were written for this project. The review and pacing practices in the edit skill draw on FrameJam's [Clean Cut playbook](https://github.com/moritzkremb/framejam/tree/bc45364aff90ba931d350e931291940fdc6e604c/playbooks/clean-cut), [video-use](https://github.com/browser-use/video-use/tree/43cfc56) (MIT), [take-one](https://github.com/talsiach/take-one/tree/43fd27b) (MIT), and public workflow descriptions in [mrpaidsocial-video-editor-agent](https://github.com/mrpaidsocial/mrpaidsocial-video-editor-agent/tree/81a8eea).

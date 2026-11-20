@@ -19,7 +19,7 @@ if (version !== await latest()) throw new Error('Only the latest version can be 
 const existing = await readNotes(folder);
 if (existing) {
   await projectState(folder, 'notes.js', { notes: existing.notes, sentAt: existing.sentAt });
-  console.log(JSON.stringify(existing, null, 2));
+  console.log(JSON.stringify({ ...existing, feedback: await handoff(existing) }, null, 2));
 } else {
   const child = spawn('lavish-axi', ['poll', path, '--owner', 'video-review', ...args],
     { stdio: ['inherit', 'pipe', 'inherit'] });
@@ -69,18 +69,15 @@ async function handoff(record) {
     .filter(name => name.endsWith('.transcript.json')).map(name => join(folder, 'media', name));
   const next = `v${Number(version.slice(1)) + 1}`;
   const defaultRoot = basename(root) === 'review';
+  const reviewRootArg = defaultRoot ? '' : ` --review-root ${quote(root)}`;
   const buildArgs = defaultRoot ? next : `${next} ${quote(root)}`;
   const reviewArg = defaultRoot ? next : quote(join(root, next, 'review.html'));
   return {
     version, notes: record.notes.length, notes_file: join(folder, 'notes.json'), edl: join(folder, 'edl.json'),
     ...(transcripts.length ? { transcripts } : {}), ...(hasComposition ? { composition } : {}),
-    next_step: `Edit ${hasComposition ? composition : 'the working composition'} to address each note in notes_file. ` +
-      'edl.json maps composition frames to proxy and source frames and lists shot cuts; ' +
-      (transcripts.length ? 'the transcripts give word timings in source seconds. ' : '') +
-      `Then, from ${quote(workspace)}, run dailies-axi build ${buildArgs} --note "<summary>" --outcomes <file> ` +
-      `with a JSON object mapping each note ID to text or { note, frame, end_frame? } in ${next}, and dailies-axi review ${reviewArg}.` +
-      (hasComposition && defaultRoot
-        ? ` Or run dailies-axi open ${quote(composition)} --note "<summary>" --outcomes <file> to build, open and poll in one step.`
-        : ''),
+    next_step: `For footage edits, use the dailies-edit skill. From ${quote(workspace)}, run dailies-cut plan ${version}${reviewRootArg}. ` +
+      'Inspect the evidence, fill ops.json, then use dailies-cut apply, verify and select. ' +
+      `Build the chosen version with dailies-axi build ${buildArgs} --note "<summary>" --outcomes <verified changes.json>, ` +
+      `then run dailies-axi review ${reviewArg}. For author-controlled graphics or animation notes, inspect the working composition and use the legacy outcomes format when it has no managed cut.`,
   };
 }

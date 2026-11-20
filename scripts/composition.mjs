@@ -16,8 +16,8 @@ const originalAttribute = node => {
 export const referencesOriginal = node => originalAttribute(node) !== undefined;
 const label = node => attribute(node, 'id') ? `#${attribute(node, 'id')}` : `<${node.tagName}>`;
 
-export function parseComposition(html) {
-  const document = parse(html);
+export function parseComposition(html, options) {
+  const document = parse(html, options);
   const root = [...elements(document)].find(node => attribute(node, 'data-composition-id') !== undefined);
   if (!root) throw new Error('Missing the HyperFrames composition root');
   const fps = Number(attribute(root, 'data-fps'));

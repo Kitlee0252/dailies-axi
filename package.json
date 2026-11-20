@@ -6,7 +6,8 @@
   "license": "MIT",
   "type": "module",
   "bin": {
-    "dailies-axi": "scripts/cli.mjs"
+    "dailies-axi": "scripts/cli.mjs",
+    "dailies-cut": "scripts/cut-cli.mjs"
   },
   "engines": {
     "node": ">=26"

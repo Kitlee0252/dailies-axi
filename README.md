@@ -14,19 +14,19 @@ npm link
 dailies-axi doctor
 ```
 
-With the clone on disk and npm’s global bin directory on your `PATH`, `dailies-axi` works from any directory. Use `dailies-axi --help` for the command list and `dailies-axi <command> --help` for options. Doctor exits with status 1 when a required tool is missing. Whisper and its model are optional.
+With the clone on disk and npm’s global bin directory on your `PATH`, `dailies-axi` works from any directory. The same install provides `dailies-cut`. Use `dailies-axi --help` for the review commands and `dailies-axi <command> --help` for options. Doctor exits with status 1 when a required tool is missing. Whisper and its model are optional for collecting feedback and required for independent verification of audible dialogue.
 
 ## Footage quick start
 
 **Never use `lavish-axi share` or `lavish-axi export` on footage reviews, including through the Lavish browser menu.** Use a private workspace outside the tool checkout. Keep originals, proxies, frame grabs, transcripts, review builds, and feedback off Git and out of uploads. For machine-local reviews, configure Lavish to listen only on loopback. Lavish can bind a Tailscale address by default. [Lavish network configuration](https://github.com/kunchenguid/lavish-axi#how-it-works)
 
 ```sh
-dailies-axi open /path/to/rough-cut.mp4
+dailies-axi open /path/to/rough-cut.mp4 --brief "Audience, destination, target length and goal"
 ```
 
 From your working directory, this creates `rough-cut-review/`, ingests the video as `cut`, builds `v1`, and opens it in Lavish. Ingest detects shot cuts and transcribes the speech when local Whisper is available. The command prints the review link under `session.url` and the transcript status under `transcript` before waiting in the foreground for feedback. Use `dailies-axi open /path/to/rough-cut.mp4 my-review --no-poll` to return after opening, then run `dailies-axi poll my-review/review/v1/review.html` when ready.
 
-Pass a second path to name the workspace, `--asset ID` to name the proxy, or `--version vN` to choose the initial version number. Use `--language CODE` for speech other than Mandarin, `--srt FILE` for subtitles you already have, or `--no-transcribe` to skip speech. A missing or failed transcription never blocks the review. Later builds follow that number in order and require locked feedback on the preceding version. If the workspace path already exists, `open` refuses. Use the individual commands below to continue in an existing workspace, including after a partial run.
+The first interactive open asks for the brief if you omit `--brief`. `brief.md` stores the answer for later rounds. Pass a second path to name the workspace, `--asset ID` to name the proxy, or `--version vN` to choose the initial version number. Use `--language CODE` for speech other than Mandarin, `--srt FILE` for subtitles you already have, or `--no-transcribe` to skip speech. A missing or failed transcription never blocks the review. Later builds follow that number in order and require locked feedback on the preceding version. If the workspace path already exists, `open` refuses. Use the individual commands below to continue in an existing workspace, including after a partial run.
 
 ### Run the steps individually
 
@@ -102,7 +102,7 @@ This opens the 24-second Night Signal composition in Lavish. Keep the poll attac
 ## Review and revise
 
 1. In Lavish, scrub or step through frames, drag a rectangle over an area, drag on the timeline to mark a range, or use **Whole video** for a general note. Yellow ticks on the timeline mark shot cuts, and a dragged range snaps to a cut within a fifth of a second. Click transcript text to jump to its frame or Shift-click to select its range. The transcript shows only the speech this version plays. Choose **Send feedback to agent** to submit the batch.
-2. Read the `dailies-axi poll` receipt and the version’s `notes.json`. The poll wrapper persists the first valid batch and locks that version’s review. It keeps the Lavish session and prompts. Its `feedback` section names the notes file, EDL, transcripts and working composition, and its `next_step` replaces Lavish’s advice to edit the generated review page. The review page’s DOM snapshot is omitted. If the batch was already locked, it prints the stored JSON.
+2. Read the `dailies-axi poll` receipt and the version’s `notes.json`. The poll wrapper persists the first valid batch and locks that version’s review. It keeps the Lavish session and prompts. Its `feedback` section names the notes file, EDL, transcripts and working composition, and its `next_step` replaces Lavish’s advice to edit the generated review page. The review page’s DOM snapshot is omitted. If the batch was already locked, it prints the stored batch and the handoff again.
 3. Check the version before editing. A note’s target file and selector locate candidate DOM elements. For footage, use `edl.json` and the note’s source spans to follow the edit across cuts. Each note except a whole-video note lists the `shots` it touches as cut-to-cut frame ranges, and `edl.json` lists every cut under `cuts`. A note’s `spoken` or `spoken_around` quote is what the reviewer heard in that version. Ranges are half-open `[frame, end_frame)`. Source offsets use the original presentation timeline. A spatial anchor includes the exact `media_frame` and a normalized rectangle on the upright source when the placement supports it.
 4. For a frame grab, give the extractor the snapshot proxy and the note’s exact zero-based proxy frame.
 
@@ -111,7 +111,7 @@ This opens the 24-second Night Signal composition in Lavish. Keep the poll attac
    dailies-axi frame review/v1/media/camera.mp4 90 renders/check.jpg
    ```
 
-5. Edit the working composition and open the next version after polling the preceding batch. From the workspace, run
+5. For source footage, follow the verified editing flow below. For independently authored compositions without a managed cut, you can edit the working composition and pass legacy outcomes. From the workspace, run
 
    ```sh
    dailies-axi open source/index.html --note "Shortened the pause" --outcomes notes/v2-outcomes.json
@@ -127,29 +127,65 @@ This opens the 24-second Night Signal composition in Lavish. Keep the poll attac
    }
    ```
 
-   Frame numbers refer to the **new version’s timeline**. They are zero-based, and `end_frame` is exclusive. In the new review’s previous-round list, clicking a frame jumps to it and clicking a range also highlights that span. The new `version.json` records its parent, summary and outcomes. Opening the new version posts its link and summary in the previous version’s Lavish conversation. Lavish’s `end` command can close the previous session. If the reviewer chose **Send & End**, stop polling that session after reading its final receipt.
+   Frame numbers refer to the **new version’s timeline**. They are zero-based, and `end_frame` is exclusive. In the new review’s previous-round list, clicking a frame jumps to it and clicking a range also highlights that span. The new `version.json` records its parent, summary and outcomes. Opening the new version posts its link and summary in the previous version’s Lavish conversation. Previous-round notes also link to the new version at the outcome’s frame or range. Lavish’s `end` command can close the previous session. If the reviewer chose **Send & End**, stop polling that session after reading its final receipt.
 
    For separate steps or a custom review output directory, use `build v2 --note ... --outcomes FILE`, then `review` and `poll`. Keep that same output directory across rounds.
 
 `build` defaults to `source/index.html` and writes to `review/vN/`. If no working composition exists, it uses the bundled animation. Use `--composition FILE` for another edit. If you use a custom media directory, pass the same `--media DIR` to ingest, transcribe, and build. If you pass a custom output directory to `build`, give `review` and `poll` its explicit `review.html` path. Paths resolve from the current directory. The runtime, GSAP and review page assets come from the installation.
 
-The original scripts remain available to developers. See the CLI help for the equivalent commands. Set `DAILIES_DEBUG=1` to include stack traces with CLI errors. Run `npm test` from the checkout.
+The original scripts remain available to developers. See the CLI help for the equivalent commands. Set `DAILIES_DEBUG=1` to include stack traces with CLI errors. Run `npm test` from the checkout. On macOS, `test/fixtures/make-rough-cut.sh /path/to/new-private-fixture` makes the synthetic Tingting rough cut for local rendering and browser QA.
 
-## Install the agent skill
+## Apply a footage review with dailies-cut
 
-From the clone, copy the bundled skill into the account-level directory for your agent. Start a new agent session to pick it up.
+Run the following inside the private review workspace after `dailies-axi poll v1` has locked the batch.
+
+```sh
+dailies-cut plan v1
+# Inspect cut-plans/v1/evidence and complete ops.json from ops.draft.json.
+dailies-cut apply ops.json --candidate balanced
+dailies-cut verify balanced
+dailies-cut select balanced
+dailies-axi open source/index.html --note "Tightened the review cut" \
+  --outcomes cut-candidates/balanced/changes.json
+```
+
+`analyze [asset]` measures color cuts and quiet intervals with FFmpeg. It caches by proxy hash. `plan` matches the locked note batch to the reviewed EDL and gives you source intervals, candidate cut points, frames, and waveforms. Read and listen to the evidence before choosing an operation. Use `--review-root DIR` on `plan` and `apply` if the workspace uses a custom review output directory.
+
+The edit contracts carry `schema_version: 1`. All intervals are zero-based and half-open. In `cut.json` and `ops.json`, the canonical source coordinate is the ingested asset's frame on its conformed proxy. For variable-frame-rate originals, the manifest maps those frames back to decoded source indexes and presentation timestamps. Composition frames are derived from the ordered source ranges. The engine supports contiguous 1× footage with one active source segment at a time and no reused source interval.
+
+| Operation | Fields beyond `note`, `intent`, `authority`, `scope`, `op` |
+| --- | --- |
+| `delete` | `asset`, `range: [start, end]`. An explicit local range delete covers the locked selection. |
+| `trim` | `clip`, `asset`, `range: [newIn, newOut]`. An extension must use footage outside the current cut and earlier removals. |
+| `tighten` | `min_pause` and `keep_pad` in seconds. Use global scope for an authorized whole-film pacing pass. For a local note, an optional `asset` and `range` can narrow the treatment. |
+| `overlay` | Unique `element`, `text` or an authored HTML `template` ID, `anchor: {asset, range}`, and normalized `rect: {x, y, width, height}` relative to the composition. Use `replace: true` with explicit authority to re-anchor an existing overlay. |
+| `ask`, `decline` | `reason`. The outcome stays pending. |
+
+Choose `explicit`, `inferred`, or `taste` for authority and `local` or `global` for scope. Keep the draft's `from` version and `batch` ID. If a localized note authorizes global work, record why in `scope_reason`. In a full render with audio, use `language` and set `expected_speech` to the checked dialogue after editing, or to an empty string for a film without dialogue. Verification compares a fresh local transcription after normalizing case, spacing, and punctuation. Check script variants such as written numbers against the dialogue.
+
+The engine plans every operation on the reviewed source axis before updating the cut. For a deletion or trim it prefers a quiet visual cut within six frames, then the existing quiet position or a nearby quiet boundary. It reports a boundary with no safe cut and keeps a lost overlay anchor visible in the report. `select` installs the cumulative `cut.json` and regenerates the managed portions of `source/index.html`. Author-controlled graphics and animation stay in the surrounding HTML. A `template` for an overlay can live outside the managed sections within the composition root.
+
+For a taste note, apply two or more named candidates from the same locked batch. Keep explicit changes identical and vary the treatment. Verify each candidate, then compare its private `render/film.mp4` and `changes.json` before selection. Candidates are separate and only the chosen one advances the review version.
+
+`verify` checks conform against the locked EDL, source cut safety, flash shots, overlay placement, and duration. The actual render is checked independently for frame count, flash shots, cut audio, dialogue and visible overlay pixels. Loudness and pause heuristics are warnings. Up to three minutes, the full render is automatic. For a longer edit, ask the reviewer whether to render all of it. Use `--render` if they agree or `--windows` for localized evidence around edited cuts and overlays. HyperFrames 0.9.69 supports window renders at 24, 25, 30 and 60 fps. A diagnostic `--edl-only` run cannot authorize delivery. Telemetry and update checks are disabled for engine renders.
+
+The review consumes verified `changes.json` with the adjacent `verify.json`. It checks the receipt against the composition, proxies and locked inputs before building. The change list preserves each note's status, output frames, affected source ranges and operation details. It and the reviewer's later reactions are the inputs for recording preferences. Keep candidates, transcripts, analysis and render evidence off Git.
+
+## Install the agent skills
+
+From the clone, copy the bundled skills into the account-level directory for your agent. Start a new agent session to pick it up.
 
 ```sh
 # Claude Code
 mkdir -p ~/.claude/skills
-cp -R skills/dailies-axi ~/.claude/skills/
+cp -R skills/dailies-axi skills/dailies-edit ~/.claude/skills/
 
 # Codex
 mkdir -p ~/.agents/skills
-cp -R skills/dailies-axi ~/.agents/skills/
+cp -R skills/dailies-axi skills/dailies-edit ~/.agents/skills/
 ```
 
-The package also includes a root `plugin.json` for clients that support Agent Plugins. The skill uses the installed `dailies-axi` command and adds no server of its own.
+The package also includes a root `plugin.json` for clients that support Agent Plugins. The skills use the installed `dailies-axi` and `dailies-cut` commands.
 
 ## License
 

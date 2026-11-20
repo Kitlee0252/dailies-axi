@@ -325,9 +325,25 @@ function renderNotes() {
     const spoken = note.spoken ?? note.spoken_around;
     if (spoken) item.append(Object.assign(document.createElement('p'), { textContent: `Spoken · ${spoken}` }));
     const resolution = nextVersion?.resolutions[note.id];
-    if (resolution) item.append(Object.assign(document.createElement('p'), {
-      textContent: `Addressed in ${resolution.version} · ${resolution.note}`,
-    }));
+    if (resolution) {
+      const outcome = Object.assign(document.createElement('p'), {
+        textContent: `${resolution.status === 'pending' ? 'Pending in' : 'Addressed in'} ${resolution.version} · ${resolution.note}`,
+      });
+      for (const [start, end] of outcomeTargets(resolution)) {
+        if (!nextVersion.review_url) continue;
+        const url = new URL(nextVersion.review_url);
+        if (!['http:', 'https:'].includes(url.protocol)) continue;
+        url.searchParams.set('dailies-frame', start);
+        if (end !== undefined) url.searchParams.set('dailies-end', end);
+        const link = Object.assign(document.createElement('a'), {
+          href: url.href, target: '_blank', rel: 'noopener',
+          textContent: end === undefined ? `Open ${resolution.version} at F${start}`
+            : `Open ${resolution.version} at F${start}–F${end}`,
+        });
+        outcome.append(' ', link);
+      }
+      item.append(outcome);
+    }
     return item;
   }));
   drawTimeline();
@@ -352,8 +368,8 @@ window.reviewState = state => {
     }
   }
   if (state.next) {
+    changed = JSON.stringify(state.next) !== JSON.stringify(nextVersion) || changed;
     nextVersion = state.next;
-    changed = true;
   }
   if (ready && changed) renderNotes();
 };
@@ -365,10 +381,26 @@ function refreshState(file) {
 }
 function refreshReview() {
   if (!locked) refreshState('notes.js');
-  if (!nextVersion) refreshState('next.js');
+  if (!nextVersion?.review_url) refreshState('next.js');
 }
 refreshReview();
 setInterval(refreshReview, 2000);
+
+function outcomeTargets(result) {
+  const targets = result?.frames ?? (result?.frame === undefined ? [] : [[result.frame, result.end_frame]]);
+  return targets.map(([start, end]) => [start, end === start + 1 ? undefined : end]);
+}
+
+function initialPosition() {
+  const url = new URL(document.referrer || document.URL);
+  if (!url.searchParams.has('dailies-frame')) return 0;
+  const value = key => /^\d+$/.test(url.searchParams.get(key) ?? '') ? Number(url.searchParams.get(key)) : undefined;
+  const start = value('dailies-frame');
+  const end = value('dailies-end');
+  if (start === undefined || start >= frameCount) return 0;
+  if (end > start && end <= frameCount) range = { start, end };
+  return start;
+}
 
 function renderHistory() {
   if (!record.parent) return;
@@ -379,20 +411,20 @@ function renderHistory() {
     const row = Object.assign(document.createElement('li'), {
       textContent: `${note.id} · ${note.text} → ${result?.note ?? 'No outcome recorded'}`,
     });
-    if (result?.frame === undefined) return row;
-    const { frame: start, end_frame: end } = result;
-    const button = Object.assign(document.createElement('button'), {
-      type: 'button', disabled: !ready,
-      textContent: end === undefined ? `Jump to F${start}` : `Jump to F${start}–F${end} (end excluded)`,
-    });
-    button.onclick = () => {
-      if (!ready || gesture) return;
-      range = end === undefined ? null : { start, end };
-      navigate(start);
-      drawTimeline();
-      canvas.scrollIntoView({ block: 'start' });
-    };
-    row.append(' ', button);
+    for (const [start, end] of outcomeTargets(result)) {
+      const button = Object.assign(document.createElement('button'), {
+        type: 'button', disabled: !ready,
+        textContent: end === undefined ? `Jump to F${start}` : `Jump to F${start}–F${end} (end excluded)`,
+      });
+      button.onclick = () => {
+        if (!ready || gesture) return;
+        range = end === undefined ? null : { start, end };
+        navigate(start);
+        drawTimeline();
+        canvas.scrollIntoView({ block: 'start' });
+      };
+      row.append(' ', button);
+    }
     return row;
   }));
 }
@@ -468,7 +500,7 @@ iframe.addEventListener('load', () => {
     $('#range-start').max = frameCount - 1;
     $('#range-end').max = frameCount;
     for (const selector of ['#play', '#previous', '#next', '#seek']) $(selector).disabled = false;
-    seekFrame(0);
+    seekFrame(initialPosition());
     renderTranscript();
     renderNotes();
     renderHistory();
