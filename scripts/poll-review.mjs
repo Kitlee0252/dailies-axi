@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 import { access, readFile, readdir } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
 import { decode, encode } from '@toon-format/toon';
-import { lockNotes, notesState, projectState, readNotes } from './notes.mjs';
+import { lockNotes, notesState, persistTranscriptEdits, projectState, readNotes } from './notes.mjs';
 
 const [file, ...args] = process.argv.slice(2);
 if (!file || basename(file) !== 'review.html') {
@@ -18,6 +18,7 @@ const latest = async () => (await readdir(root, { withFileTypes: true }))
 if (version !== await latest()) throw new Error('Only the latest version can be polled for video feedback');
 const existing = await readNotes(folder);
 if (existing) {
+  await persistTranscriptEdits(folder, existing);
   await projectState(folder, 'notes.js', notesState(existing));
   console.log(JSON.stringify({ ...existing, feedback: await handoff(existing) }, null, 2));
 } else {

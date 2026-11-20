@@ -12,7 +12,7 @@ import { outcomeNotes, resolveOutcomes } from './outcomes.mjs';
 import { readReviewProof } from './review-proof.mjs';
 import { latestVersion } from './workspace.mjs';
 import { readManifest, sha256, writeJson } from './manifest.mjs';
-import { projectState, readNotes } from './notes.mjs';
+import { persistTranscriptEdits, projectState, readNotes } from './notes.mjs';
 import { readBrief } from './brief.mjs';
 
 export async function buildReview(args) {
@@ -53,15 +53,6 @@ export async function buildReview(args) {
   }
   const composition = normalizeComposition(authorHtml, document);
   const assets = Object.fromEntries(edl.segments.map(({ asset }) => [asset, manifest.assets[asset]]));
-  const transcripts = {};
-  for (const [id, asset] of Object.entries(assets)) {
-    try {
-      const transcript = JSON.parse(await readFile(join(dir, `${id}.transcript.json`), 'utf8'));
-      if (transcript.source_sha256 === asset.source_sha256) transcripts[id] = transcript;
-    } catch (error) {
-      if (error.code !== 'ENOENT') throw error;
-    }
-  }
   const root = resolve(outputRoot);
   const folder = join(root, version);
   const number = Number(version.slice(1));
@@ -77,6 +68,16 @@ export async function buildReview(args) {
     const parent = latest ? `v${latest}` : null;
     const previous = parent ? await readNotes(join(root, parent)) : null;
     if (parent && !previous) throw new Error(`Poll and lock ${parent}'s feedback before building ${version}`);
+    if (previous) await persistTranscriptEdits(join(root, parent), previous);
+    const transcripts = {};
+    for (const [id, asset] of Object.entries(assets)) {
+      try {
+        const transcript = JSON.parse(await readFile(join(dir, `${id}.transcript.json`), 'utf8'));
+        if (transcript.source_sha256 === asset.source_sha256) transcripts[id] = transcript;
+      } catch (error) {
+        if (error.code !== 'ENOENT') throw error;
+      }
+    }
     const outcomesText = values.outcomes ? await readFile(resolve(values.outcomes), 'utf8') : '{}';
     const outcomes = JSON.parse(outcomesText);
     const resolutions = resolveOutcomes(outcomes, previous, version, edl.frame_count);
@@ -85,6 +86,7 @@ export async function buildReview(args) {
       parentFolder: parent ? join(root, parent) : undefined, media: dir,
       assets: Object.keys(assets), frameCount: edl.frame_count, fps: edl.fps });
     const record = { version, parent, note: values.note, resolutions,
+      overlay_position: previous?.overlay_position,
       ...(brief ? { reviewers: brief.reviewers } : {}),
       ...(proof ? { cut_sha256: proof.cut_sha256, verification_coverage: proof.verification_coverage } : {}) };
     const inline = code => `<script>${code.replace(/<\/script/gi, '<\\/script')}</script>`;
@@ -117,7 +119,7 @@ export async function buildReview(args) {
         if (transcripts[id]) await writeJson(join(stage, 'media', `${id}.transcript.json`), transcripts[id]);
       }
     }
-    await writeJson(join(stage, 'version.json'), record);
+    await writeJson(join(stage, 'version.json'), { ...record, transcript_media: dir });
     if (proof) await writeFile(join(stage, 'changes.json'), outcomesText, { mode: 0o600 });
     await writeJson(join(stage, 'edl.json'), edl);
     await projectState(stage, 'notes.js', { notes: null });

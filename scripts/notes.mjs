@@ -3,8 +3,12 @@
 // MIT License, Copyright (c) 2026 Moritz Kremb. See third_party/framejam/LICENSE.
 // Changes: one batch per Lavish version, committed to disk by the poll wrapper.
 import { randomUUID } from 'node:crypto';
-import { link, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { link, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { isDeepStrictEqual } from 'node:util';
+import { mapInterval } from './edl.mjs';
+import { readManifest, writeJson } from './manifest.mjs';
+import { correctTranscript, withSpoken } from './spoken.mjs';
 
 export async function projectState(folder, file, state) {
   const path = join(folder, file);
@@ -26,7 +30,62 @@ export async function readNotes(folder) {
 
 export const supportedNotes = record => [2, 3].includes(record?.schema_version);
 export const notesState = record => ({ notes: record?.notes ?? null, sentAt: record?.sentAt,
-  reviewer: record?.reviewer, reactions: record?.reactions });
+  reviewer: record?.reviewer, reactions: record?.reactions, transcript_edits: record?.transcript_edits,
+  overlay_position: record?.overlay_position });
+
+const readJson = async file => JSON.parse(await readFile(file, 'utf8'));
+const optionalJson = file => readJson(file).catch(error => {
+  if (error.code !== 'ENOENT') throw error;
+});
+
+async function prepareCorrections(folder, edits) {
+  const { transcript_media: media } = await readJson(join(folder, 'version.json'));
+  if (typeof media !== 'string') throw new Error('This review does not support transcript corrections');
+  const snapshot = join(folder, 'media');
+  const { assets } = await readManifest(snapshot);
+  const sources = await readManifest(media);
+  const transcripts = {};
+  const changes = new Map();
+  for (const edit of edits) {
+    if (!edit || !Object.hasOwn(assets, edit.asset) || !Object.hasOwn(sources.assets, edit.asset) ||
+        sources.assets[edit.asset].source_sha256 !== assets[edit.asset].source_sha256) {
+      throw new Error('Unknown or changed asset for transcript correction');
+    }
+    const batch = changes.get(edit.asset) ?? [];
+    batch.push(edit);
+    changes.set(edit.asset, batch);
+  }
+  const plan = [];
+  for (const asset of Object.keys(assets)) {
+    const name = `${asset}.transcript.json`;
+    const original = await optionalJson(join(snapshot, name));
+    const batch = changes.get(asset);
+    const corrected = batch ? correctTranscript(original, batch) : original;
+    if (corrected) transcripts[asset] = corrected;
+    if (batch) plan.push({ asset, file: join(media, name), original, corrected });
+  }
+  return { media, assets, transcripts, plan };
+}
+
+export async function persistTranscriptEdits(folder, record) {
+  if (!record?.transcript_edits?.length) return;
+  const marker = join(folder, '.transcript-edits-applied.json');
+  if ((await optionalJson(marker))?.batch === record.batch.id) return;
+  const { media, plan } = await prepareCorrections(folder, record.transcript_edits);
+  for (const { asset, file, original, corrected } of plan) {
+    const lock = join(media, `.${asset}.transcribe-lock`);
+    await mkdir(lock);
+    try {
+      const current = await optionalJson(file);
+      if (isDeepStrictEqual(current, corrected)) continue;
+      if (!isDeepStrictEqual(current, original)) throw new Error(`Transcript changed after this review was built: ${asset}`);
+      await writeJson(file, corrected);
+    } finally {
+      await rm(lock, { recursive: true });
+    }
+  }
+  await writeJson(marker, { batch: record.batch.id });
+}
 
 async function validateCapture(folder, data) {
   const review = JSON.parse(await readFile(join(folder, 'version.json'), 'utf8'));
@@ -66,8 +125,25 @@ export async function lockNotes(folder, latest, data) {
     throw new Error('Nothing valid to send: add a note first');
   }
   if (data.schema_version === 3) data = await validateCapture(folder, data);
-  if (!data.notes.length && (data.schema_version !== 3 || !data.reactions.length)) {
-    throw new Error('Nothing valid to send: add a note or reaction first');
+  const edits = data.transcript_edits ?? [];
+  if (!Array.isArray(edits) || (edits.length && data.schema_version !== 3) ||
+      (data.overlay_position !== undefined && (!Number.isFinite(data.overlay_position) ||
+        data.overlay_position < 0 || data.overlay_position > 1))) {
+    throw new Error('Invalid transcript review data');
+  }
+  if (!data.notes.length && (data.schema_version !== 3 || (!data.reactions.length && !edits.length))) {
+    throw new Error('Nothing valid to send: add a note, reaction or transcript correction first');
+  }
+  if (edits.length) {
+    const { assets, transcripts, plan } = await prepareCorrections(folder, edits);
+    for (const { asset, file, original } of plan) {
+      if (!isDeepStrictEqual(await optionalJson(file), original)) {
+        throw new Error(`Transcript changed after this review was built: ${asset}`);
+      }
+    }
+    const edl = await readJson(join(folder, 'edl.json'));
+    data.notes = data.notes.map(({ source, spoken, spoken_around, ...note }) =>
+      withSpoken(note, mapInterval(edl, assets, note.frame, note.end_frame ?? note.frame + 1), transcripts, edl));
   }
   const createdAt = new Date().toISOString();
   const batch = { id: randomUUID(), createdAt, commentIds: data.notes.map(note => note.id) };
@@ -86,6 +162,7 @@ export async function lockNotes(folder, latest, data) {
   } finally {
     await rm(temp, { force: true });
   }
+  await persistTranscriptEdits(folder, record);
   await projectState(folder, 'notes.js', notesState(record));
   return record;
 }

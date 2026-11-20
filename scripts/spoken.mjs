@@ -25,6 +25,35 @@ export function transcriptCues(transcript) {
   return cues;
 }
 
+export function correctTranscript(transcript, edits) {
+  if (!edits.length) return transcript;
+  if (!transcript?.words.length) throw new Error('No transcript for correction');
+  const starts = new Set(transcriptCues(transcript).map(cue => cue.words[0]));
+  const words = [], paragraphs = [];
+  let cursor = 0;
+  const retain = until => {
+    while (cursor < until) {
+      const word = transcript.words[cursor++];
+      if (starts.has(word)) paragraphs.push(words.length);
+      words.push(word);
+    }
+  };
+  for (const { from, to, text } of [...edits].sort((a, b) => a.from - b.from)) {
+    if (!Number.isSafeInteger(from) || !Number.isSafeInteger(to) || from < cursor ||
+        to <= from || to > transcript.words.length || typeof text !== 'string' || !text.trim() || text.length > 1000) {
+      throw new Error('Invalid transcript correction');
+    }
+    retain(from);
+    if (starts.has(transcript.words[from])) paragraphs.push(words.length);
+    const original = transcript.words.slice(from, to);
+    words.push({ text: text.trim(), start: original[0].start, end: Math.max(...original.map(word => word.end)),
+      review_edited: true });
+    cursor = to;
+  }
+  retain(transcript.words.length);
+  return { ...transcript, corrected: true, words, paragraphs };
+}
+
 export function spokenAround(transcript, seconds) {
   if (!transcript?.words.length) return undefined;
   const cues = transcriptCues(transcript);
@@ -47,11 +76,9 @@ export function playedTranscript(edl, transcripts) {
     const transcript = transcripts[segment.asset];
     const kept = (transcript?.words ?? []).filter(word =>
       word.end > segment.source_in_seconds && word.start < segment.source_out_seconds);
-    const starts = transcript?.corrected === false
-      ? new Set(transcriptCues(transcript).map(cue => cue.words[0]))
-      : undefined;
+    const starts = new Set(transcriptCues(transcript).map(cue => cue.words[0]));
     for (const [index, word] of kept.entries()) {
-      if (index === 0 || starts?.has(word)) paragraphs.push(words.length);
+      if (index === 0 || starts.has(word)) paragraphs.push(words.length);
       words.push({ text: word.text, start: word.start + offset, end: word.end + offset });
     }
   }

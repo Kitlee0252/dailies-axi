@@ -1,7 +1,7 @@
 import { pickRect, frameAt } from './regions.mjs';
 import { mapInterval, shotSpans, snapToCut } from './edl.mjs';
 import { commentAt, feedbackPrompt, sortNotes } from './feedback-format.mjs';
-import { transcriptCues, withSpoken } from './spoken.mjs';
+import { correctTranscript, transcriptCues, withSpoken } from './spoken.mjs';
 import { joinWords } from './transcript.mjs';
 import { updateSelection } from './review-selection.mjs';
 
@@ -18,16 +18,23 @@ let reviewer = reviewers.length === 1 ? reviewers[0].id : 'anonymous';
 const reactionKey = (ref, actor) => `${ref}:${actor}`;
 let port, ready, width, height, fps, frameCount, playing = false, positioned = false;
 let frame = 0, gesture, draft, request = 0, noteCount = 0, range, dragRange;
-let cues = [], currentCue;
+let cues = [], currentCue, editingCue, composerAnchor, overlayDrag;
+let overlayPosition = record.overlay_position ?? .76;
+let transcriptEdits = [], reviewedTranscripts = transcripts;
 $('#version').textContent = version;
 const status = message => { $('#status').textContent = message; };
 const editable = () => ready && stateLoaded && !locked && !sent;
-const hasFeedback = () => notes.length > 0 || reactions.size > 0;
+const hasFeedback = () => notes.length > 0 || reactions.size > 0 || transcriptEdits.length > 0;
 
 function resize() {
   if (!ready) return;
   iframe.style.transform = `scale(${canvas.clientWidth / width})`;
   if (draft?.rect) placeComposer(draft.rect);
+  positionOverlay();
+}
+
+function positionPlayhead() {
+  playhead.style.transform = `translateX(${(frame + .5) / frameCount * timeline.clientWidth}px)`;
 }
 
 function redraw() {
@@ -46,7 +53,6 @@ function redraw() {
 
 function drawTimeline() {
   const selected = dragRange ? dragRange.preview : range;
-  timeline.hidden = !editable() && !edl.segments.length && !selected && !notes.some(note => note.kind === 'range');
   const spans = [
     ...edl.segments.map(segment => [segment.start_frame, segment.end_frame, 'clip-span']),
     ...notes.filter(note => note.kind === 'range').map(note => [note.frame, note.end_frame, 'noted-span']),
@@ -60,10 +66,7 @@ function drawTimeline() {
     return span;
   }));
   timeline.append(playhead);
-  clearRange.hidden = !selected;
-  if (selected) {
-    $('#range-label').textContent = `Selected F${selected.start}–F${selected.end} (${((selected.end - selected.start) / fps).toFixed(1)} s)`;
-  }
+  clearRange.disabled = !selected;
   for (const cue of cues) {
     cue.button.classList.toggle('in-range', Boolean(selected && cue.start < selected.end && cue.end > selected.start));
   }
@@ -76,19 +79,20 @@ function selectRange(action) {
 }
 
 function updateRangeFields() {
-  $('#range-start').value = range?.start ?? frame;
-  $('#range-end').value = range?.end ?? Math.min(frame + 1, frameCount);
+  const selected = dragRange?.preview ?? range;
+  $('#range-start').value = selected?.start ?? frame;
+  $('#range-end').value = selected?.end ?? Math.min(frame + 1, frameCount);
 }
 
 function showFrame(index) {
   frame = index;
   seek.value = index;
-  playhead.style.left = `${(index + .5) / frameCount * 100}%`;
+  positionPlayhead();
   $('#time').textContent = `${(index / fps).toFixed(3)} s · F${index}`;
   const spans = mapInterval(edl, assets, index, index + 1);
   $('#source-frame').textContent = spans.map(span =>
     `${span.clip} · source F${span.source_frame}${span.repeated ? ' · repeated proxy frame' : ''}`).join(' / ');
-  if (!range && !dragRange) updateRangeFields();
+  if (!range && (!dragRange || dragRange.scrub)) updateRangeFields();
   syncTranscript();
   redraw();
 }
@@ -103,10 +107,15 @@ function seekFrame(index, { play = false, rect } = {}) {
 }
 
 function closeComposer() {
+  const restoreFocus = draft && composer.contains(document.activeElement);
   draft = null;
   composer.hidden = true;
   composer.classList.remove('spatial');
+  composer.style.removeProperty('left');
+  composer.style.removeProperty('top');
   input.value = '';
+  if (restoreFocus) composerAnchor?.focus({ preventScroll: true });
+  composerAnchor = null;
   redraw();
 }
 
@@ -140,7 +149,8 @@ function placeComposer(rect) {
   composer.style.top = `${bottom + composer.offsetHeight + 8 > canvas.clientHeight && above >= 0 ? above : bottom + 8}px`;
 }
 
-function openComposer(note, waiting = false) {
+function openComposer(note, waiting = false, anchor = document.activeElement) {
+  composerAnchor = anchor;
   draft = { ...note, version, time_seconds: note.frame / fps, targets: [] };
   $('#targets').textContent = waiting ? 'Finding editable elements and footage…' : commentAt(draft);
   composer.querySelector('[type=submit]').disabled = waiting;
@@ -182,7 +192,7 @@ surface.onpointerup = event => {
   const scoped = range && regionFrame >= range.start && regionFrame < range.end;
   openComposer(scoped
     ? { kind: 'range', frame: range.start, end_frame: range.end, region_frame: regionFrame, rect }
-    : { kind: 'pin', frame: regionFrame, rect }, true);
+    : { kind: 'pin', frame: regionFrame, rect }, true, timeline);
   seekFrame(regionFrame, { rect });
 };
 
@@ -196,15 +206,21 @@ timeline.onpointerdown = event => {
   if (!ready || gesture || dragRange || !event.isPrimary || event.button !== 0) return;
   closeComposer();
   const start = timelineFrame(event);
-  dragRange = { id: event.pointerId, origin: start, x: event.clientX, preview: range };
+  const scrub = event.target === playhead || Math.abs(event.clientX - playhead.getBoundingClientRect().left - 1) <= 7;
+  dragRange = { id: event.pointerId, origin: start, x: event.clientX, preview: range, scrub };
   if (event.isTrusted) timeline.setPointerCapture(event.pointerId);
-  seekFrame(start);
+  seekFrame(scrub ? frame : start);
 };
 timeline.onpointermove = event => {
-  if (dragRange?.id !== event.pointerId || !editable()) return;
+  if (dragRange?.id !== event.pointerId) return;
   if (!dragRange.dragged && Math.abs(event.clientX - dragRange.x) < 5) return;
   dragRange.dragged = true;
   const index = timelineFrame(event);
+  if (dragRange.scrub) {
+    if (index !== frame) seekFrame(index);
+    return;
+  }
+  if (!editable()) return;
   let start = Math.min(index, dragRange.origin), end = Math.max(index, dragRange.origin) + 1;
   // A dragged range snaps each edge to a shot cut within a fifth of a second.
   if (end - start > 2) {
@@ -218,6 +234,11 @@ timeline.onpointermove = event => {
 timeline.onpointerup = event => {
   if (dragRange?.id !== event.pointerId) return;
   timeline.onpointermove(event);
+  if (dragRange.scrub && dragRange.dragged) {
+    dragRange = null;
+    updateRangeFields();
+    return;
+  }
   const selected = editable() && dragRange.dragged ? dragRange.preview : null;
   dragRange = null;
   selectRange(selected ? { type: 'range', ...selected } : { type: 'clear' });
@@ -250,12 +271,12 @@ $('#add-range').onclick = () => {
   if (!editable()) return;
   const start = range?.start ?? frame, end = range?.end ?? frame + 1;
   seekFrame(start);
-  openComposer({ kind: 'range', frame: start, end_frame: end });
+  openComposer({ kind: 'range', frame: start, end_frame: end }, false, $('#add-range'));
 };
 $('#whole').onclick = () => {
   if (!editable()) return;
   if (playing) seekFrame(frame);
-  openComposer({ kind: 'general', frame: 0, end_frame: frameCount, whole_video: true });
+  openComposer({ kind: 'general', frame: 0, end_frame: frameCount, whole_video: true }, false, $('#whole'));
 };
 document.addEventListener('keydown', event => {
   if (event.altKey || event.metaKey || event.ctrlKey || event.defaultPrevented) return;
@@ -292,7 +313,7 @@ composer.onsubmit = event => {
   const shots = draft.whole_video || !edl.segments.length ? {}
     : { shots: shotSpans(edl, draft.frame, draft.end_frame ?? draft.frame + 1) };
   const note = withSpoken({ ...draft, id: `N${++noteCount}`, text, ...shots,
-    ...(reviewers.length > 1 ? { reviewer } : {}) }, spans, transcripts, edl);
+    ...(reviewers.length > 1 ? { reviewer } : {}) }, spans, reviewedTranscripts, edl);
   notes.push(note);
   range = null;
   closeComposer();
@@ -314,7 +335,9 @@ function renderTranscript() {
   cues = edl.segments.flatMap(segment => {
     const asset = assets[segment.asset];
     const startSeconds = segment.source_in_seconds, endSeconds = segment.source_out_seconds;
-    return transcriptCues(transcripts[segment.asset]).flatMap(cue => {
+    const transcript = transcripts[segment.asset];
+    const indexes = new Map(transcript?.words.map((word, index) => [word, index]));
+    return transcriptCues(transcript).flatMap(cue => {
       // Show only words this segment plays, so trimmed speech disappears from later versions.
       // Any overlap counts because Whisper's word times can be a few tenths of a second off.
       const words = cue.words.filter(word => word.end > startSeconds && word.start < endSeconds);
@@ -330,25 +353,108 @@ function renderTranscript() {
       const first = segment.start_frame + start - segment.media_in;
       const last = segment.start_frame + end - segment.media_in;
       const button = Object.assign(document.createElement('button'), {
-        type: 'button', textContent: joinWords(words.map(word => word.text)),
-        title: `Jump to F${first}. Shift-click to select or extend a range.`,
+        type: 'button', className: 'cue-text',
       });
       const bounds = { start: first, end: last };
       button.onclick = event => {
         navigate(first, event.shiftKey && editable() ? { type: 'cue', cue: bounds } : { type: 'clear' });
       };
-      return [{ ...bounds, button }];
+      const editor = Object.assign(document.createElement('input'), {
+        className: 'cue-editor', type: 'text', maxLength: 1000, hidden: true,
+      });
+      editor.setAttribute('aria-label', `Transcript line at F${first}`);
+      const edit = Object.assign(document.createElement('button'), { type: 'button', className: 'cue-edit' });
+      const row = Object.assign(document.createElement('div'), { className: 'transcript-line' });
+      row.append(button, editor, edit);
+      const line = { ...bounds, asset: segment.asset, from: indexes.get(words[0]),
+        to: indexes.get(words.at(-1)) + 1, row, button, edit, editor };
+      edit.onclick = () => startCueEdit(line);
+      editor.onkeydown = event => {
+        if (event.key !== 'Enter' && event.key !== 'Escape') return;
+        event.preventDefault();
+        event.stopPropagation();
+        finishCueEdit(event.key === 'Enter');
+      };
+      return [line];
     });
   });
   $('#transcript').hidden = overlayToggle.hidden = !cues.length;
-  wordsList.replaceChildren(...cues.map(cue => cue.button));
+  wordsList.replaceChildren(...cues.map(cue => cue.row));
+  refreshCueText();
   syncTranscript();
 }
 
+function refreshCueText() {
+  for (const cue of cues) {
+    const original = transcripts[cue.asset].words;
+    const edits = transcriptEdits.filter(edit => edit.asset === cue.asset && edit.from < cue.to && edit.to > cue.from)
+      .sort((a, b) => a.from - b.from);
+    const pieces = [];
+    let i = cue.from;
+    for (const edit of edits) {
+      pieces.push(...original.slice(i, Math.max(i, edit.from)).map(word => word.text), edit.text);
+      i = edit.to;
+    }
+    const untouched = original.slice(i, cue.to);
+    pieces.push(...untouched.map(word => word.text));
+    cue.text = joinWords(pieces);
+    const changed = edits.length || untouched.some(word => word.review_edited);
+    cue.button.textContent = cue.text;
+    cue.button.title = `${cue.text}\nJump to F${cue.start}. Shift-click to select or extend a range.`;
+    cue.edit.textContent = changed ? 'Edited' : 'Edit';
+    cue.edit.setAttribute('aria-label', `${changed ? 'Edited transcript' : 'Edit transcript'} at F${cue.start}`);
+    cue.edit.classList.toggle('edited', Boolean(changed));
+  }
+  updateOverlay();
+}
+
+function startCueEdit(cue) {
+  if (!editable()) return;
+  finishCueEdit(false, false);
+  editingCue = cue;
+  cue.editor.value = cue.text;
+  cue.button.hidden = true;
+  cue.editor.hidden = false;
+  cue.editor.focus({ preventScroll: true });
+  cue.editor.select();
+}
+
+function finishCueEdit(save, restoreFocus = true) {
+  if (!editingCue) return;
+  const cue = editingCue;
+  const text = cue.editor.value.trim();
+  if (save && editable() && !text) {
+    status('Enter the corrected line, or press Esc to cancel.');
+    return;
+  }
+  editingCue = undefined;
+  cue.editor.hidden = true;
+  cue.button.hidden = false;
+  if (restoreFocus) cue.edit.focus({ preventScroll: true });
+  if (!save || !editable() || text === cue.text) return;
+  const original = transcripts[cue.asset].words.slice(cue.from, cue.to);
+  const edits = transcriptEdits.filter(edit => edit.asset !== cue.asset || edit.to <= cue.from || edit.from >= cue.to);
+  if (text !== joinWords(original.map(word => word.text))) {
+    edits.push({ asset: cue.asset, from: cue.from, to: cue.to, text });
+  }
+  applyTranscriptEdits(edits);
+  notes = notes.map(({ source, spoken, spoken_around, ...note }) =>
+    withSpoken(note, mapInterval(edl, assets, note.frame, note.end_frame ?? note.frame + 1), reviewedTranscripts, edl));
+  renderNotes();
+  status('Transcript corrected locally. Send feedback to save it for the next version.');
+}
+
+function applyTranscriptEdits(edits) {
+  transcriptEdits = edits;
+  reviewedTranscripts = Object.fromEntries(Object.entries(transcripts).map(([asset, transcript]) =>
+    [asset, correctTranscript(transcript, edits.filter(edit => edit.asset === asset))]));
+  refreshCueText();
+}
+
 function scrollToCurrentCue() {
-  if (!currentCue || !$('#transcript').open) return;
+  if (!currentCue) return;
   const list = wordsList.getBoundingClientRect();
-  const line = currentCue.button.getBoundingClientRect();
+  const line = currentCue.row.getBoundingClientRect();
   // Scroll only the transcript so the video and transport stay in view.
   if (line.top < list.top) wordsList.scrollTop += line.top - list.top;
   else if (line.bottom > list.bottom) wordsList.scrollTop += line.bottom - list.bottom;
@@ -356,7 +462,8 @@ function scrollToCurrentCue() {
 
 function updateOverlay() {
   overlay.hidden = !currentCue || overlayToggle.getAttribute('aria-pressed') !== 'true';
-  $('#overlay-text').textContent = overlay.hidden ? '' : currentCue.button.textContent;
+  $('#overlay-text').textContent = overlay.hidden ? '' : currentCue.text;
+  positionOverlay();
 }
 
 function syncTranscript() {
@@ -369,18 +476,38 @@ function syncTranscript() {
   updateOverlay();
 }
 
-$('#transcript').ontoggle = scrollToCurrentCue;
 overlayToggle.onclick = () => {
   overlayToggle.setAttribute('aria-pressed', overlayToggle.getAttribute('aria-pressed') !== 'true');
   updateOverlay();
 };
 
+function positionOverlay() {
+  if (overlay.hidden) return;
+  const margin = Math.min(.5, overlay.offsetHeight / (2 * canvas.clientHeight));
+  const y = Math.max(margin, Math.min(1 - margin, overlayPosition)) * canvas.clientHeight;
+  overlay.style.transform = `translate(-50%, calc(${y}px - 50%))`;
+}
+
+overlay.onpointerdown = event => {
+  if (!event.isPrimary || event.button !== 0) return;
+  const bounds = overlay.getBoundingClientRect();
+  overlayDrag = { id: event.pointerId, offset: event.clientY - (bounds.top + bounds.height / 2) };
+  if (event.isTrusted) overlay.setPointerCapture(event.pointerId);
+};
+overlay.onpointermove = event => {
+  if (overlayDrag?.id !== event.pointerId) return;
+  const canvasBounds = canvas.getBoundingClientRect();
+  overlayPosition = Math.max(0, Math.min(1, (event.clientY - overlayDrag.offset - canvasBounds.top) / canvasBounds.height));
+  positionOverlay();
+};
+overlay.onpointerup = overlay.onpointercancel = overlay.onlostpointercapture = () => { overlayDrag = undefined; };
+
 function renderNotes() {
   $('#count').textContent = `(${notes.length})`;
   $('#empty').hidden = notes.length > 0;
   $('#send').disabled = !editable() || !hasFeedback();
-  $('#note-tools').hidden = !editable();
-  $('#send').hidden = locked || sent;
+  for (const selector of ['#range-start', '#range-end', '#add-range', '#whole']) $(selector).disabled = !editable();
+  for (const cue of cues) cue.edit.disabled = !editable();
   $('#reviewer').disabled = !editable();
   surface.classList.toggle('locked', locked || sent);
   $('#notes').replaceChildren(...sortNotes(notes).map(note => {
@@ -447,6 +574,10 @@ window.reviewState = state => {
         reactionKey(reaction.outcome, reaction.reviewer ?? reviewer), reaction);
       if (firstLock) {
         closeComposer();
+        finishCueEdit(false);
+        applyTranscriptEdits(state.transcript_edits ?? []);
+        if (Number.isFinite(state.overlay_position)) overlayPosition = state.overlay_position;
+        positionOverlay();
         status('Feedback locked. This round is read-only.');
       }
     }
@@ -508,7 +639,6 @@ function renderHistory() {
         range = end === undefined ? null : { start, end };
         navigate(start);
         drawTimeline();
-        canvas.scrollIntoView({ block: 'start' });
       };
       row.append(' ', button);
     }
@@ -585,6 +715,7 @@ renderHistory();
 
 $('#send').onclick = async () => {
   if (!editable() || !hasFeedback()) return;
+  if (editingCue) return status('Press Enter to save the transcript edit, or Esc to cancel.');
   if (!window.lavish?.queuePrompt || !window.lavish?.sendQueuedPrompts) return status('Open with lavish-axi to send feedback.');
   const batch = structuredClone(sortNotes(notes));
   const response = [...reactions.values()];
@@ -596,7 +727,8 @@ $('#send').onclick = async () => {
     await window.lavish.queuePrompt(feedbackPrompt(version, batch, response), { tag: 'video-review',
       text: `${batch.length} note(s), ${response.length} reaction(s) for ${version}`, queueKey: `region-review-${version}`,
       data: { schema_version: 3, version, composition: 'composition/index.html',
-        width, height, fps, frame_count: frameCount, reviewer, reactions: response, notes: batch } });
+        width, height, fps, frame_count: frameCount, reviewer, reactions: response, notes: batch,
+        transcript_edits: transcriptEdits, overlay_position: overlayPosition } });
     const result = await window.lavish.sendQueuedPrompts();
     if (result === false || result?.ok === false) throw new Error('Lavish rejected this batch');
     if (!locked) status('Submitted to Lavish. Waiting for the agent’s poll to lock this round.');
@@ -655,6 +787,7 @@ iframe.addEventListener('load', () => {
     seek.max = frameCount - 1;
     $('#range-start').max = frameCount - 1;
     $('#range-end').max = frameCount;
+    timeline.hidden = false;
     for (const selector of ['#play', '#previous', '#next', '#seek']) $(selector).disabled = false;
     seekFrame(initialPosition());
     renderTranscript();
@@ -665,4 +798,5 @@ iframe.addEventListener('load', () => {
   iframe.contentWindow.postMessage('frame-review:connect', '*', [channel.port2]);
 }, { once: true });
 new ResizeObserver(resize).observe(canvas);
+new ResizeObserver(() => { if (ready) positionPlayhead(); }).observe(timeline);
 iframe.srcdoc = config.liveComposition;

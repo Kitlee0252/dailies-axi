@@ -124,6 +124,7 @@ async function announce(file, url) {
   if (reply.status !== 0) {
     return `Could not post the ${version} link in the ${parent} review. Give the reviewer the session URL.`;
   }
+  delete record.transcript_media;
   await projectState(dirname(previous), 'next.js', { next: { ...record, review_url: url } });
   await writeFile(marker, url);
   return `Posted the ${version} link in the ${parent} review.`;

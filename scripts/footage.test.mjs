@@ -2,6 +2,63 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { frameMidpoint, rectInSource } from './regions.mjs';
 
+test('review corrections keep source cue bounds and untouched words', async () => {
+  const { correctTranscript } = await import('./spoken.mjs');
+  const transcript = { corrected: false, words: [
+    { text: 'first', start: 0, end: 1 }, { text: 'line.', start: 1, end: 2 },
+    { text: 'later.', start: 4, end: 5 },
+  ] };
+  const corrected = correctTranscript(transcript, [{ from: 0, to: 2, text: 'Fixed phrase' }]);
+  assert.equal(corrected.corrected, true);
+  assert.deepEqual(corrected.words, [
+    { text: 'Fixed phrase', start: 0, end: 2, review_edited: true },
+    { text: 'later.', start: 4, end: 5 },
+  ]);
+  assert.deepEqual(corrected.paragraphs, [0, 1]);
+  assert.equal(transcript.words[0].text, 'first');
+  assert.throws(() => correctTranscript(transcript, [
+    { from: 0, to: 2, text: 'first' }, { from: 1, to: 2, text: 'overlaps' },
+  ]), /correction/);
+});
+
+test('locked corrections update the working transcript and note quotes but preserve the review snapshot', async t => {
+  const { mkdtemp, mkdir, readFile, rm } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const { writeJson } = await import('./manifest.mjs');
+  const { lockNotes, persistTranscriptEdits } = await import('./notes.mjs');
+  const dir = await mkdtemp(join(tmpdir(), 'dailies-translation-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const folder = join(dir, 'review'), snapshot = join(folder, 'media'), media = join(dir, 'working');
+  await mkdir(snapshot, { recursive: true });
+  await mkdir(media);
+  const asset = { proxy: 'media/cut.mp4', source_sha256: 'source', source_fps: '1/1', duration: 2,
+    source_pts: [0, 1], proxy_to_source: [0, 1] };
+  const transcript = { source_sha256: 'source', words: [{ start: 0, end: 2, text: 'Wrong' }] };
+  for (const boundary of [media, snapshot]) {
+    await writeJson(join(boundary, 'manifest.json'), { schema_version: 1, assets: { cut: asset } });
+    await writeJson(join(boundary, 'cut.transcript.json'), transcript);
+  }
+  await writeJson(join(folder, 'version.json'), { version: 'v1', transcript_media: media });
+  await writeJson(join(folder, 'edl.json'), { fps: 1, segments: [{ asset: 'cut', clip: 'cut', start_frame: 0,
+    end_frame: 2, media_in: 0, source_in_seconds: 0, source_out_seconds: 2 }] });
+  const correction = { asset: 'cut', from: 0, to: 1, text: 'Correct' };
+  const capture = await lockNotes(folder, 'v1', {
+    schema_version: 3, version: 'v1', notes: [{ id: 'N1', kind: 'range', frame: 0, end_frame: 2,
+      text: 'Keep the spoken line', spoken: 'Wrong' }], transcript_edits: [correction], overlay_position: .6,
+  });
+  assert.deepEqual(capture.transcript_edits, [correction]);
+  assert.equal(capture.overlay_position, .6);
+  assert.equal(capture.notes[0].spoken, 'Correct');
+  assert.equal(capture.notes[0].source[0].spoken, 'Correct');
+  const read = async boundary => JSON.parse(await readFile(join(boundary, 'cut.transcript.json'), 'utf8'));
+  assert.deepEqual(await read(snapshot), transcript);
+  assert.deepEqual((await read(media)).words, [{ start: 0, end: 2, text: 'Correct', review_edited: true }]);
+  await writeJson(join(media, 'cut.transcript.json'), { ...transcript, corrected: true });
+  await persistTranscriptEdits(folder, capture);
+  assert.deepEqual(await read(media), { ...transcript, corrected: true });
+});
+
 test('frame midpoint works at fractional source rates', () => {
   assert.ok(Math.abs(frameMidpoint(24, 24000 / 1001) - 24.5 * 1001 / 24000) < 1e-12);
 });

@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en" data-lavish-annotate="off">
+<html lang="en" data-lavish-annotate="off" data-lavish-action>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -18,14 +18,19 @@
     #surface, #markers { position: absolute; inset: 0 }
     #surface { cursor: crosshair; touch-action: none }
     #markers { pointer-events: none }
-    #transcript-overlay { position: absolute; top: 4%; left: 50%; transform: translateX(-50%); width: max-content;
-      max-width: 92%; padding: 6px 10px; border-radius: 6px; background: #11111be8; color: #fff;
-      text-align: center; font-size: clamp(.76rem, 2.5vw, 1.1rem); overflow-wrap: anywhere; pointer-events: none }
-    #transcript-overlay b { color: var(--mint); font-size: .75em; margin-right: .4em }
+    #transcript-overlay { position: absolute; z-index: 1; top: 0; left: 50%; transform: translate(-50%, -50%);
+      width: min(92%, 520px); height: 2.75em; padding: 0 10px; border-radius: 6px; background: #11111be8; color: #fff;
+      font-size: clamp(.76rem, 2.5vw, 1.1rem); line-height: 1.15; overflow-wrap: anywhere; cursor: ns-resize;
+      touch-action: none; user-select: none }
+    #transcript-overlay:not([hidden]) { display: grid; align-items: center; grid-template-columns: max-content 1fr; gap: .4em }
+    #transcript-overlay b { color: var(--mint); font-size: .75em }
+    #overlay-text { height: 2.3em; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; text-align: center }
     .region { position: absolute; border: 2px solid var(--mint); background: #b8f3d822 }
     .region b { position: absolute; left: 0; top: 0; background: var(--mint); color: #131824; font: bold 12px system-ui; padding: 1px 5px }
-    #composer { margin: 10px auto; z-index: 1; width: min(330px, calc(100% - 16px)); padding: 12px; border: 1px solid var(--line); border-radius: 9px; background: #211d30; box-shadow: 0 8px 32px #0009 }
-    #composer.spatial { position: absolute; margin: 0 }
+    #composer { position: absolute; top: 8px; left: 50%; translate: -50% 0; z-index: 2;
+      width: min(330px, calc(100% - 16px)); padding: 12px; border: 1px solid var(--line); border-radius: 9px;
+      background: #211d30; box-shadow: 0 8px 32px #0009 }
+    #composer.spatial { translate: none }
     #surface.locked { cursor: default }
     #timeline { height: 24px; margin-top: 8px; background: #262236; position: relative; border: 1px solid var(--line); border-radius: 6px; cursor: crosshair; touch-action: none }
     #timeline span { position: absolute; top: 2px; bottom: 2px; pointer-events: none }
@@ -33,16 +38,22 @@
     .noted-span { background: #8cb4bf }
     .selected-span { background: #b8f3d8 }
     #timeline .cut-mark { top: -3px; bottom: -3px; width: 2px; margin-left: -1px; background: #ffda72 }
-    #timeline .playhead { top: 0; bottom: 0; width: 2px; margin-left: -1px; background: #fff; box-shadow: 0 0 0 1px #11111b }
-    #clear-range { margin: 8px 0 0; padding: 4px 10px; background: var(--mint); color: #131824;
-      border-color: var(--mint); border-radius: 16px; font-weight: 700; font-variant-numeric: tabular-nums }
+    #timeline .playhead { top: 0; bottom: 0; left: 0; width: 2px; margin-left: -1px; background: #fff; box-shadow: 0 0 0 1px #11111b }
+    #timeline .playhead { pointer-events: auto; cursor: ew-resize }
+    #timeline .playhead::after { content: ''; position: absolute; inset: 0 -7px }
     #note-tools { margin: 10px 0 14px }
     #note-tools .row { margin-top: 8px }
     #note-tools input { width: 6em }
-    #source-frame { font-size: .85rem }
+    #source-frame { height: 1.3rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .85rem }
     #transcript { margin: 12px 0 }
-    #words { display: grid; gap: 4px; max-height: 11em; overflow: auto; padding: 2px 4px }
-    #words button { text-align: left }
+    #words { height: 11rem; overflow: auto; scrollbar-gutter: stable; padding: 2px 4px }
+    .transcript-line { display: grid; grid-template-columns: minmax(0, 1fr) 4.25rem; gap: 4px; height: 2.75rem; margin-bottom: 4px }
+    .transcript-line > * { min-width: 0; height: 100% }
+    .cue-text { text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
+    .cue-edit { padding-inline: 4px }
+    .cue-edit.edited { color: var(--mint); border-color: #5a9077 }
+    .cue-editor { width: 100%; padding: 6px 10px; color: inherit; background: #141222; border: 1px solid var(--mint); border-radius: 6px }
+    #transcript h2 { margin: 0 0 4px }
     #words .in-range { background: #315347; border-color: #5a9077 }
     #words [aria-current="true"] { box-shadow: inset 3px 0 var(--mint); color: var(--mint); border-color: var(--mint) }
     #stage { position: relative }
@@ -55,15 +66,26 @@
     textarea { display: block; resize: vertical; width: 100%; min-height: 66px; margin: 7px 0; padding: 6px; background: #141222; color: inherit; border: 1px solid var(--line); border-radius: 4px }
     .row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px }
     .transport { margin: 12px 0; padding-bottom: 12px; border-bottom: 1px solid var(--line) }
-    #seek { flex: 1; min-width: 100px; accent-color: var(--mint) }
-    output { font-variant-numeric: tabular-nums; min-width: 126px; font-size: .86rem }
-    #targets { margin: 5px 0; font-size: .82rem }
+    #play { width: 4.75rem }
+    #seek { flex: 1; min-width: 60px; accent-color: var(--mint) }
+    #time { font-variant-numeric: tabular-nums; width: 10rem; font-size: .86rem; white-space: nowrap }
+    #toggle-transcript { width: 10.5rem }
+    @media (max-width: 660px) { #seek { flex-basis: calc(100% - 10rem); min-width: 0 } }
+    #targets { margin: 5px 0; height: 2.5em; overflow: auto; font-size: .82rem }
+    #note-list { height: 10rem; overflow: auto }
     #notes { padding-left: 26px }
     #notes li { margin: 6px 0; border-bottom: 1px solid var(--line); padding: 5px 0; overflow-wrap: anywhere }
     #notes li p { white-space: pre-wrap; margin: 6px 0 }
     #previous-notes li { margin-bottom: 12px; overflow-wrap: anywhere }
     .outcome-feedback { margin-top: 7px }
-    #status { margin: 8px 0; min-height: 1.5em }
+    #status { margin: 8px 0; height: 3em; overflow: auto }
+    html[data-lavish-action] :where(body, main, main *) { cursor: default !important }
+    html[data-lavish-action] :where(button, a[href], label, select, input[type=range]) { cursor: pointer !important }
+    html[data-lavish-action] :where(textarea, input[type=text], input[type=number]) { cursor: text !important }
+    html[data-lavish-action] :where(button:disabled) { cursor: default !important }
+    #surface:not(.locked), #timeline { cursor: crosshair !important }
+    #timeline .playhead { cursor: ew-resize !important }
+    #transcript-overlay { cursor: ns-resize !important }
   </style>
 </head>
 <body>
@@ -74,9 +96,11 @@
   <div id="stage">
     <div id="canvas">
       <iframe id="composition" title="Live HyperFrames composition" sandbox="allow-scripts" tabindex="-1"></iframe>
-      <div id="transcript-overlay" hidden><b>Transcript</b> <span id="overlay-text"></span></div>
       <div id="markers" aria-hidden="true"></div>
       <div id="surface" data-lavish-action></div>
+      <div id="transcript-overlay" title="Drag vertically to position" data-lavish-action hidden>
+        <b lang="zh">转写</b> <span id="overlay-text"></span>
+      </div>
     </div>
     <form id="composer" hidden>
       <label for="feedback">What should change here?</label>
@@ -95,30 +119,30 @@
   </div>
   <p id="source-frame"></p>
   <div id="timeline" hidden tabindex="0" data-lavish-action aria-label="Review timeline. Click to jump or drag to select a range."></div>
-  <button id="clear-range" type="button" title="Clear range (Esc). End frame is excluded." aria-keyshortcuts="Escape" hidden>
-    <span id="range-label"></span> <span aria-hidden="true">✕</span>
-  </button>
-  <section id="note-tools" hidden>
+  <section id="note-tools">
     <div class="row">
-      <label>Start frame <input id="range-start" type="number" min="0" step="1"></label>
-      <label>End frame (excluded) <input id="range-end" type="number" min="1" step="1"></label>
-      <button id="add-range">Add range note</button>
-      <button id="whole" aria-keyshortcuts="W">Whole video</button>
+      <label>Start frame <input id="range-start" type="number" min="0" step="1" disabled></label>
+      <label>End frame (excluded) <input id="range-end" type="number" min="1" step="1" disabled></label>
+      <button id="clear-range" type="button" aria-keyshortcuts="Escape" disabled>Clear range</button>
+      <button id="add-range" type="button" disabled>Add range note</button>
+      <button id="whole" type="button" aria-keyshortcuts="W" disabled>Whole video</button>
     </div>
   </section>
-  <details id="transcript" open hidden>
-    <summary>Transcript</summary>
-    <p>Click a line to jump and clear the range. Shift-click to select or extend a range.</p>
+  <section id="transcript" hidden>
+    <h2>Transcript</h2>
+    <p>Click to jump, Shift-click to select a range, or choose Edit to correct a line.</p>
     <div id="words"></div>
-  </details>
+  </section>
   <details id="history" open hidden>
     <summary>Previous round</summary>
     <p id="version-summary"></p>
     <ul id="previous-notes"></ul>
   </details>
   <h2>Notes <span id="count"></span></h2>
-  <p id="empty">No notes yet.</p>
-  <ol id="notes"></ol>
+  <div id="note-list">
+    <p id="empty">No notes yet.</p>
+    <ol id="notes"></ol>
+  </div>
   <label id="reviewer-field" hidden>Reviewing as <select id="reviewer"></select></label>
   <button id="send" class="primary" disabled>Send feedback to agent</button>
   <p id="status" role="status">Loading live composition…</p>
